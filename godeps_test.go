@@ -1,0 +1,452 @@
+package godeps
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+)
+
+type memoryCache struct {
+	mu   sync.RWMutex
+	data map[string]string
+}
+
+func (m *memoryCache) Get(key string, target any) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	val, ok := m.data[key]
+	if !ok {
+		return false
+	}
+	if strPtr, ok := target.(*string); ok {
+		*strPtr = val
+		return true
+	}
+	return false
+}
+
+func (m *memoryCache) Put(key string, val any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if str, ok := val.(string); ok {
+		m.data[key] = str
+	}
+	return nil
+}
+
+func (m *memoryCache) Delete(key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
+	return nil
+}
+
+func TestIsAgentMode(t *testing.T) {
+	os.Unsetenv("AGENT")
+	if IsAgentMode() {
+		t.Errorf("IsAgentMode() = true, want false when AGENT is unset")
+	}
+
+	os.Setenv("AGENT", "1")
+	if !IsAgentMode() {
+		t.Errorf("IsAgentMode() = false, want true when AGENT=1")
+	}
+
+	os.Setenv("AGENT", "true")
+	if !IsAgentMode() {
+		t.Errorf("IsAgentMode() = false, want true when AGENT=true")
+	}
+
+	os.Setenv("AGENT", "0")
+	if IsAgentMode() {
+		t.Errorf("IsAgentMode() = true, want false when AGENT=0")
+	}
+
+	os.Unsetenv("AGENT")
+}
+
+func TestDependencyReport_Summary(t *testing.T) {
+	tests := []struct {
+		name   string
+		report DependencyReport
+		want   string
+	}{
+		{
+			name: "satisfied",
+			report: DependencyReport{
+				Name:            "fetch-track",
+				MinVersion:      "1.4.0",
+				DetectedVersion: "1.4.0",
+				Installed:       true,
+				Satisfied:       true,
+			},
+			want: "fetch-track (version 1.4.0, min 1.4.0)",
+		},
+		{
+			name: "installed but outdated",
+			report: DependencyReport{
+				Name:            "fetch-track",
+				MinVersion:      "1.4.0",
+				DetectedVersion: "1.3.0",
+				Installed:       true,
+				Satisfied:       false,
+			},
+			want: "fetch-track (installed 1.3.0, required >= 1.4.0)",
+		},
+		{
+			name: "not installed",
+			report: DependencyReport{
+				Name:       "yt-dlp",
+				MinVersion: "2024.08.01",
+				Installed:  false,
+				Satisfied:  false,
+			},
+			want: "yt-dlp (not installed, required >= 2024.08.01)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.report.Summary()
+			if got != tt.want {
+				t.Errorf("DependencyReport.Summary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNew_Defaults(t *testing.T) {
+	mgr := New(Config{})
+	if mgr.appName != "godeps" {
+		t.Errorf("expected default appName 'godeps', got %q", mgr.appName)
+	}
+	if mgr.runner == nil {
+		t.Errorf("expected default runner not nil")
+	}
+}
+
+func TestManager_Verify(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. All satisfied
+	okRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "toolA":
+			return []byte("1.4.0"), nil
+		case "toolB":
+			return []byte("2025.01.01"), nil
+		}
+		return nil, errors.New("unknown")
+	}
+
+	mgr := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{Name: "toolA", MinVersion: "1.0.0"},
+			{Name: "toolB", MinVersion: "2024.01.01"},
+		},
+		Runner: okRunner,
+	})
+
+	reports, err := mgr.Verify(ctx)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(reports) != 2 || !reports[0].Satisfied || !reports[1].Satisfied {
+		t.Errorf("expected all reports satisfied, got %#v", reports)
+	}
+
+	// 2. Missing binary (not found) in agent mode
+	t.Setenv("AGENT", "1")
+	missingRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, &exec.Error{Name: name, Err: exec.ErrNotFound}
+	}
+	mgr.runner = missingRunner
+	reports, err = mgr.Verify(ctx)
+	if err == nil {
+		t.Errorf("expected error for missing binaries in agent mode")
+	}
+
+	// 2b. Missing binary in non-agent mode
+	t.Setenv("AGENT", "0")
+	reports, err = mgr.Verify(ctx)
+	if err == nil {
+		t.Errorf("expected error for missing binaries in non-agent mode")
+	}
+
+	// 3. Outdated binary in agent mode
+	t.Setenv("AGENT", "1")
+	outdatedRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("0.0.1"), nil
+	}
+	mgr.runner = outdatedRunner
+	reports, err = mgr.Verify(ctx)
+	if err == nil {
+		t.Errorf("expected error for outdated binary in agent mode")
+	}
+
+	// 3b. Outdated binary in non-agent mode
+	t.Setenv("AGENT", "0")
+	reports, err = mgr.Verify(ctx)
+	if err == nil {
+		t.Errorf("expected error for outdated binary in non-agent mode")
+	}
+
+	// 4. Execution error
+	errRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("execution failed")
+	}
+	mgr.runner = errRunner
+	_, err = mgr.Verify(ctx)
+	if err == nil {
+		t.Errorf("expected error for runner failure")
+	}
+
+	// 5. Empty version output
+	emptyRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte(""), nil
+	}
+	mgr.runner = emptyRunner
+	_, _ = mgr.Verify(ctx)
+}
+
+func TestManager_Verify_WithCache(t *testing.T) {
+	ctx := context.Background()
+	c := &memoryCache{data: map[string]string{
+		"godeps_toolA.json": "2.0.0",
+		"godeps_toolB.json": "2025.01.01",
+	}}
+
+	failRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("runner should not be called when cache is populated for %s", name)
+		return nil, errors.New("fail")
+	}
+
+	mgr := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{Name: "toolA", MinVersion: "1.0.0"},
+			{Name: "toolB", MinVersion: "2024.01.01"},
+		},
+		Runner: failRunner,
+		Cache:  c,
+	})
+
+	reports, err := mgr.Verify(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error with cache: %v", err)
+	}
+	if len(reports) != 2 || !reports[0].Satisfied {
+		t.Errorf("expected satisfied cached reports, got %#v", reports)
+	}
+}
+
+func TestManager_InstallAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tempDir)
+
+	installedMap := make(map[string]bool)
+
+	mockInstaller := InstallerFunc(func(ctx context.Context, targetDir string) error {
+		installedMap["toolA"] = true
+		return nil
+	})
+
+	c := &memoryCache{data: map[string]string{"godeps_toolA.json": "old"}}
+
+	mgr := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{
+				Name:       "toolA",
+				MinVersion: "1.0.0",
+				Installer:  mockInstaller,
+			},
+			{
+				Name:       "toolNoInstaller",
+				MinVersion: "1.0.0",
+			},
+		},
+		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if installedMap[name] {
+				return []byte("1.0.0"), nil
+			}
+			return nil, &exec.Error{Name: name, Err: exec.ErrNotFound}
+		},
+		Cache: c,
+	})
+
+	// Install single
+	if err := mgr.Install(ctx, "toolA"); err != nil {
+		t.Fatalf("mgr.Install failed: %v", err)
+	}
+	if !installedMap["toolA"] {
+		t.Errorf("toolA was not installed")
+	}
+
+	// Update single
+	if err := mgr.Update(ctx, "toolA"); err != nil {
+		t.Fatalf("mgr.Update failed: %v", err)
+	}
+
+	// Install unknown
+	if err := mgr.Install(ctx, "unknown"); err == nil {
+		t.Errorf("expected error for unknown dependency install")
+	}
+
+	// Update unknown
+	if err := mgr.Update(ctx, "unknown"); err == nil {
+		t.Errorf("expected error for unknown dependency update")
+	}
+
+	// Install without installer
+	if err := mgr.Install(ctx, "toolNoInstaller"); err == nil {
+		t.Errorf("expected error for dependency with nil installer")
+	}
+
+	// Update without installer
+	if err := mgr.Update(ctx, "toolNoInstaller"); err == nil {
+		t.Errorf("expected error for dependency update with nil installer")
+	}
+
+	// InstallUnsatisfied
+	installed, err := mgr.InstallUnsatisfied(ctx)
+	if err == nil && len(installed) == 0 {
+		// toolNoInstaller fails, which is expected
+	}
+
+	// UpdateAll
+	_, _ = mgr.UpdateAll(ctx)
+}
+
+func TestManager_Ensure(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tempDir)
+
+	mockInstaller := InstallerFunc(func(ctx context.Context, targetDir string) error {
+		return nil
+	})
+
+	mgr := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{
+				Name:       "toolA",
+				MinVersion: "1.4.0",
+				Installer:  mockInstaller,
+			},
+		},
+		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("1.0.0"), nil // Outdated
+		},
+	})
+
+	// 1. AutoInstall = true
+	if err := mgr.Ensure(ctx, EnsureOptions{AutoInstall: true}); err != nil {
+		t.Errorf("Ensure with AutoInstall=true failed: %v", err)
+	}
+
+	// 2. All satisfied
+	mgrSatisfied := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{
+				Name:       "toolA",
+				MinVersion: "1.0.0",
+			},
+		},
+		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("2.0.0"), nil
+		},
+	})
+	if err := mgrSatisfied.Ensure(ctx); err != nil {
+		t.Errorf("Ensure failed when satisfied: %v", err)
+	}
+
+	// 3. Agent mode
+	t.Setenv("AGENT", "1")
+	if err := mgr.Ensure(ctx); err == nil {
+		t.Errorf("expected error in agent mode when deps unsatisfied")
+	}
+
+	// 4. Interactive mode answering 'y'
+	t.Setenv("AGENT", "0")
+	rY, wY, _ := os.Pipe()
+	_, _ = fmt.Fprintln(wY, "y")
+	_ = wY.Close()
+	oldStdin := os.Stdin
+	os.Stdin = rY
+	defer func() { os.Stdin = oldStdin }()
+
+	if err := mgr.Ensure(ctx); err != nil {
+		t.Errorf("expected Ensure to succeed when answering 'y', got: %v", err)
+	}
+
+	// 5. Interactive mode pressing Enter (default No)
+	rEnter, wEnter, _ := os.Pipe()
+	_, _ = fmt.Fprintln(wEnter, "")
+	_ = wEnter.Close()
+	os.Stdin = rEnter
+	if err := mgr.Ensure(ctx); err == nil {
+		t.Errorf("expected error when pressing Enter (default No)")
+	}
+
+	// 6. Interactive mode answering 'n'
+	rN, wN, _ := os.Pipe()
+	_, _ = fmt.Fprintln(wN, "n")
+	_ = wN.Close()
+	os.Stdin = rN
+	if err := mgr.Ensure(ctx); err == nil {
+		t.Errorf("expected error when answering 'n'")
+	}
+
+	// 7. Closed stdin / EOF
+	rEOF, wEOF, _ := os.Pipe()
+	_ = wEOF.Close()
+	os.Stdin = rEOF
+	if err := mgr.Ensure(ctx); err == nil {
+		t.Errorf("expected error on EOF")
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	if isNotFound(nil) {
+		t.Errorf("isNotFound(nil) should be false")
+	}
+	if !isNotFound(&exec.Error{Err: exec.ErrNotFound}) {
+		t.Errorf("isNotFound(exec.ErrNotFound) should be true")
+	}
+	if !isNotFound(errors.New("executable file not found in $PATH")) {
+		t.Errorf("isNotFound('executable file not found') should be true")
+	}
+	if isNotFound(errors.New("generic error")) {
+		t.Errorf("isNotFound('generic error') should be false")
+	}
+}
+
+func TestDefaultRunner(t *testing.T) {
+	ctx := context.Background()
+	out, err := DefaultRunner(ctx, "echo", "hello")
+	if err != nil {
+		t.Fatalf("DefaultRunner echo failed: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "hello" {
+		t.Errorf("unexpected output: %q", string(out))
+	}
+
+	// Command with error output
+	_, err = DefaultRunner(ctx, "sh", "-c", "echo 'Error: test failure' >&2; exit 1")
+	if err == nil {
+		t.Errorf("expected error from exit 1")
+	}
+	if !strings.Contains(err.Error(), "Error: test failure") {
+		t.Errorf("expected sanitized error message, got: %v", err)
+	}
+}
