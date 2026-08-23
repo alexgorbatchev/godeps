@@ -12,7 +12,9 @@ func TestDefaultVersionParser(t *testing.T) {
 		want   string
 	}{
 		{"yt-dlp calver", "yt-dlp", "2024.08.01\n", "2024.08.01"},
+		{"yt-dlp no match fallback", "yt-dlp", "custom-yt-dlp-build", "custom-yt-dlp-build"},
 		{"ffmpeg full banner", "ffmpeg", "ffmpeg version 6.0-extra Copyright (c) 2000-2023", "6.0-extra"},
+		{"ffmpeg no match fallback", "ffmpeg", "raw-ffmpeg-output", "raw-ffmpeg-output"},
 		{"fetch-track dev", "fetch-track", "fetch-track version dev\n", "dev"},
 		{"fetch-track semver v-prefixed", "fetch-track", "fetch-track version v1.4.0\n", "1.4.0"},
 		{"generic version", "custom-tool", "custom-tool version 2.1.0", "2.1.0"},
@@ -50,6 +52,8 @@ func TestCompareVersions(t *testing.T) {
 		{"fallback invalid non-semver higher", "invalid.2.3", "invalid.1.3", false},
 		{"fallback invalid non-semver lower", "invalid.1.3", "invalid.2.3", true},
 		{"fallback empty segments", "invalid-no-digits", "1.0.0", false},
+		{"fallback more segments higher", "1.2.3.4", "1.2.3", false},
+		{"fallback more segments lower", "1.2.3", "1.2.3.4", true},
 	}
 
 	for _, tt := range tests {

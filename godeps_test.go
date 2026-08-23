@@ -258,6 +258,10 @@ func TestManager_InstallAndUpdate(t *testing.T) {
 		return nil
 	})
 
+	failingInstaller := InstallerFunc(func(ctx context.Context, targetDir string) error {
+		return errors.New("install failure")
+	})
+
 	c := &memoryCache{data: map[string]string{"godeps_toolA.json": "old"}}
 
 	mgr := New(Config{
@@ -271,6 +275,11 @@ func TestManager_InstallAndUpdate(t *testing.T) {
 			{
 				Name:       "toolNoInstaller",
 				MinVersion: "1.0.0",
+			},
+			{
+				Name:       "toolFail",
+				MinVersion: "1.0.0",
+				Installer:  failingInstaller,
 			},
 		},
 		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -315,14 +324,26 @@ func TestManager_InstallAndUpdate(t *testing.T) {
 		t.Errorf("expected error for dependency update with nil installer")
 	}
 
+	// Install with empty appName (fails EnsureManagedBinDir)
+	mgrEmptyApp := &Manager{appName: "", dependencies: []Dependency{{Name: "toolA", Installer: mockInstaller}}}
+	if err := mgrEmptyApp.Install(ctx, "toolA"); err == nil {
+		t.Errorf("expected error when appName is empty on Install")
+	}
+	if err := mgrEmptyApp.Update(ctx, "toolA"); err == nil {
+		t.Errorf("expected error when appName is empty on Update")
+	}
+
 	// InstallUnsatisfied
-	installed, err := mgr.InstallUnsatisfied(ctx)
-	if err == nil && len(installed) == 0 {
-		// toolNoInstaller fails, which is expected
+	_, err := mgr.InstallUnsatisfied(ctx)
+	if err == nil {
+		t.Errorf("expected error from InstallUnsatisfied with failing/missing installers")
 	}
 
 	// UpdateAll
-	_, _ = mgr.UpdateAll(ctx)
+	_, err = mgr.UpdateAll(ctx)
+	if err == nil {
+		t.Errorf("expected error from UpdateAll with failing installers")
+	}
 }
 
 func TestManager_Ensure(t *testing.T) {
@@ -351,6 +372,26 @@ func TestManager_Ensure(t *testing.T) {
 	// 1. AutoInstall = true
 	if err := mgr.Ensure(ctx, EnsureOptions{AutoInstall: true}); err != nil {
 		t.Errorf("Ensure with AutoInstall=true failed: %v", err)
+	}
+
+	// 1b. AutoInstall = true with failing installer
+	failingMgr := New(Config{
+		AppName: "testapp",
+		Dependencies: []Dependency{
+			{
+				Name:       "toolA",
+				MinVersion: "1.4.0",
+				Installer: InstallerFunc(func(ctx context.Context, targetDir string) error {
+					return errors.New("install error")
+				}),
+			},
+		},
+		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("1.0.0"), nil
+		},
+	})
+	if err := failingMgr.Ensure(ctx, EnsureOptions{AutoInstall: true}); err == nil {
+		t.Errorf("expected error from Ensure when installer fails with AutoInstall=true")
 	}
 
 	// 2. All satisfied
@@ -387,6 +428,15 @@ func TestManager_Ensure(t *testing.T) {
 
 	if err := mgr.Ensure(ctx); err != nil {
 		t.Errorf("expected Ensure to succeed when answering 'y', got: %v", err)
+	}
+
+	// 4b. Interactive mode answering 'y' with failing installer
+	rYFail, wYFail, _ := os.Pipe()
+	_, _ = fmt.Fprintln(wYFail, "y")
+	_ = wYFail.Close()
+	os.Stdin = rYFail
+	if err := failingMgr.Ensure(ctx); err == nil {
+		t.Errorf("expected error when answering 'y' with failing installer")
 	}
 
 	// 5. Interactive mode pressing Enter (default No)

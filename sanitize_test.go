@@ -59,6 +59,13 @@ main.main()
 			want: "Error: Cannot find module 'some-package'",
 		},
 		{
+			name: "node stack trace with only at lines",
+			input: `
+    at Function.Module._resolveFilename (node:internal/modules/cjs/loader:1077:15)
+    at Function.Module._load (node:internal/modules/cjs/loader:928:27)`,
+			want: "at Function.Module._load (node:internal/modules/cjs/loader:928:27)",
+		},
+		{
 			name: "multiline plain text",
 			input: `first line
 second line
