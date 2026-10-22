@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -116,10 +117,18 @@ func New(cfg Config) *Manager {
 
 // EnsureOptions configures the Ensure execution.
 type EnsureOptions struct {
+	// AutoInstall installs missing and outdated dependencies without prompting.
 	AutoInstall bool
+	// Output receives progress messages and the installation prompt. It defaults
+	// to os.Stderr, keeping standard output free for the program's own results.
+	Output io.Writer
+	// Input answers the installation prompt. It defaults to os.Stdin.
+	Input io.Reader
 }
 
-// Ensure checks dependencies, injects managed PATH, and handles auto-installation prompts.
+// Ensure checks dependencies, injects managed PATH, and installs missing or
+// outdated dependencies when AutoInstall is set or an interactive user agrees.
+// It succeeds only when every dependency is satisfied afterward.
 func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 	_ = InitManagedPath(m.appName)
 
@@ -128,9 +137,17 @@ func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 		return nil
 	}
 
-	var autoInstall bool
+	var o EnsureOptions
 	if len(opts) > 0 {
-		autoInstall = opts[0].AutoInstall
+		o = opts[0]
+	}
+	out := o.Output
+	if out == nil {
+		out = os.Stderr
+	}
+	in := o.Input
+	if in == nil {
+		in = os.Stdin
 	}
 
 	var unsatisfied []string
@@ -140,40 +157,34 @@ func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 		}
 	}
 
-	if autoInstall {
-		fmt.Printf("Auto-installing missing/outdated dependencies: %s...\n", strings.Join(unsatisfied, ", "))
-		installed, installErr := m.InstallUnsatisfied(ctx)
-		if installErr != nil {
-			return fmt.Errorf("auto-installing dependencies: %w", installErr)
+	if !o.AutoInstall {
+		if IsAgentMode() {
+			return err
 		}
-		if len(installed) > 0 {
-			fmt.Printf("✓ Successfully installed: %s\n", strings.Join(installed, ", "))
-		}
-		return nil
-	}
-
-	if !IsAgentMode() {
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Printf("\nMissing or outdated dependencies: %s\nWould you like to auto-install them to managed directory? [y/N]: ", strings.Join(unsatisfied, ", "))
-		ans, readErr := reader.ReadString('\n')
+		fmt.Fprintf(out, "\nMissing or outdated dependencies: %s\nWould you like to auto-install them to managed directory? [y/N]: ", strings.Join(unsatisfied, ", "))
+		ans, readErr := bufio.NewReader(in).ReadString('\n')
 		if readErr != nil && len(ans) == 0 {
 			return err
 		}
 		ans = strings.TrimSpace(strings.ToLower(ans))
-		if ans == "y" || ans == "yes" {
-			fmt.Printf("Installing dependencies: %s...\n", strings.Join(unsatisfied, ", "))
-			installed, installErr := m.InstallUnsatisfied(ctx)
-			if installErr != nil {
-				return fmt.Errorf("auto-installing dependencies: %w", installErr)
-			}
-			if len(installed) > 0 {
-				fmt.Printf("✓ Successfully installed: %s\n\n", strings.Join(installed, ", "))
-			}
-			return nil
+		if ans != "y" && ans != "yes" {
+			return err
 		}
 	}
 
-	return err
+	fmt.Fprintf(out, "Installing missing/outdated dependencies: %s...\n", strings.Join(unsatisfied, ", "))
+	installed, installErr := m.InstallUnsatisfied(ctx)
+	if installErr != nil {
+		return fmt.Errorf("auto-installing dependencies: %w", installErr)
+	}
+	// An installer can succeed without providing a satisfying version, for
+	// example when its latest release is older than required or an older copy
+	// earlier in PATH still shadows the managed directory.
+	if _, err := m.Verify(ctx); err != nil {
+		return fmt.Errorf("dependencies remain unsatisfied after installation: %w", err)
+	}
+	fmt.Fprintf(out, "✓ Successfully installed: %s\n", strings.Join(installed, ", "))
+	return nil
 }
 
 // Verify runs version checks across all declared dependencies.
@@ -312,7 +323,7 @@ func (m *Manager) Update(ctx context.Context, depName string) error {
 	return fmt.Errorf("unknown dependency %q", depName)
 }
 
-// InstallUnsatisfied installs all currently unsatisfied dependencies.
+// InstallUnsatisfied installs missing dependencies and updates outdated ones.
 func (m *Manager) InstallUnsatisfied(ctx context.Context) ([]string, error) {
 	_ = InitManagedPath(m.appName)
 
@@ -322,7 +333,11 @@ func (m *Manager) InstallUnsatisfied(ctx context.Context) ([]string, error) {
 
 	for _, r := range reports {
 		if !r.Satisfied {
-			if err := m.Install(ctx, r.Name); err != nil {
+			install := m.Install
+			if r.Installed {
+				install = m.Update
+			}
+			if err := install(ctx, r.Name); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
 			} else {
 				installed = append(installed, r.Name)
