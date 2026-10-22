@@ -9,13 +9,14 @@
 ## What It Does
 
 - **Declarative Prerequisites**: Declare required external CLI tools with minimum versions and install strategies.
-- **Multi-Format Version Checking**: Compares standard SemVer (`1.4.0`), CalVer (`2024.08.01`), and development builds (`dev`, `git-master`), stripping tool output banners automatically.
+- **Multi-Format Version Checking**: Compares standard SemVer (`1.4.0`), CalVer (`2024.08.01`), and development builds (`dev`, `git-master`), stripping tool output banners automatically. Empty or unrecognizable versions never satisfy a requirement.
 - **Managed Directory & Runtime PATH Injection**: Downloads binaries into isolated user data directories (`$XDG_DATA_HOME/<app>/bin` / `~/.local/share/<app>/bin`) and prepends the directory to the runtime process `$PATH`.
 - **Rate-Limit-Free GitHub Release Resolution**: Resolves latest releases via HTTP `HEAD` redirect headers without consuming GitHub API rate limits.
 - **Built-in Archive Extractors**: Unpacks `.tar.gz`, `.zip`, and raw executable files with automatic permission management (`0755`).
 - **External Stderr Sanitizer**: Strips raw multiline Python tracebacks, Go panics, and Node.js stack frames, surfacing clean error messages.
 - **In-Place Self-Updates**: Upgrades the running CLI application directly from GitHub release assets.
-- **Agent-Ready & Safe Prompts**: Automatically disables interactive prompts when `AGENT=1` is set, and defaults interactive prompts to `[y/N]` rejection on Enter/EOF.
+- **Agent-Ready & Safe Prompts**: Automatically disables interactive prompts when `AGENT=1` is set, and defaults interactive prompts to `[y/N]` rejection on Enter/EOF. Prompts and progress go to standard error (or `EnsureOptions.Output`), never standard output, so they cannot corrupt a program's machine-readable results.
+- **Verified Installation**: `Ensure` and `InstallUnsatisfied` install missing tools and update outdated ones, and `Ensure` fails unless every dependency is satisfied afterward.
 
 ---
 
@@ -72,6 +73,7 @@ func main() {
 	// Injects ~/.local/share/mycli/bin to process PATH and verifies all prerequisites
 	if err := depsManager.Ensure(ctx, godeps.EnsureOptions{
 		AutoInstall: false, // Set true to bypass interactive [y/N] prompt
+		// Output and Input default to os.Stderr and os.Stdin.
 	}); err != nil {
 		log.Fatalf("Prerequisites error: %v", err)
 	}
@@ -81,6 +83,8 @@ func main() {
 ```
 
 ### 2. Verify Dependencies and Print Reports
+
+A dependency whose executable does not exist reports `Installed: false`. Custom `CommandRunner`s must wrap the underlying exec error with `%w` so a missing executable stays distinguishable from a failed version check.
 
 ```go
 reports, err := depsManager.Verify(ctx)

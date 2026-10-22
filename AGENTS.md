@@ -1,6 +1,6 @@
 ---
 created_on: 2026-08-23 13:25
-last_modified: 2026-08-23 13:25
+last_modified: 2026-10-21 19:27
 status: current
 ---
 
@@ -50,6 +50,8 @@ just tidy
 - **Mandatory Testing & Coverage**: Any time code is changed such that results from running that code are changed, a test file must be changed as well, and **90% code coverage is required** (verified via `just test`).
 - **Standard Library First**: Maintain zero heavy external dependencies. Use standard library primitives for HTTP, archives, and process execution.
 - **Rate-Limit-Free HTTP Resolution**: Never query the GitHub REST API (`/repos/.../releases`) for release discovery; always use HTTP `HEAD /releases/latest` redirect headers to avoid unauthenticated rate limiting.
+- **Fail Closed**: A dependency is satisfied only when its version was read and compared successfully. Empty, unparseable, or unverifiable versions and installations that still do not satisfy the requirement are failures.
+- **Error Kinds Over Messages**: Classify errors with `errors.Is`/`errors.As`; never infer an error kind from message substrings.
 
 ### Ask First
 - Adding third-party Go module dependencies beyond `hashicorp/go-version`.
@@ -58,4 +60,5 @@ just tidy
 ### Never
 - Never commit compiled binaries or test artifacts to the repository.
 - Never use heredocs in scripts or commands.
+- Never write to standard output from the library; consumers print machine-readable results there. Messages and prompts go to `EnsureOptions.Output` (default standard error).
 - Never treat EOF or non-interactive closed stdin as an acceptance of interactive prompts (always default to `[y/N]` rejection unless `AutoInstall: true`).
