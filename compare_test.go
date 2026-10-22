@@ -48,10 +48,10 @@ func TestCompareVersions(t *testing.T) {
 		{"git snapshot satisfies", "git-master", "1.4.0", false},
 		{"ffmpeg N-build satisfies", "N-12345", "4.4", false},
 		{"v prefix stripped", "v1.5.0", "1.4.0", false},
-		{"empty actual", "", "1.0.0", false},
+		{"empty actual", "", "1.0.0", true},
 		{"fallback invalid non-semver higher", "invalid.2.3", "invalid.1.3", false},
 		{"fallback invalid non-semver lower", "invalid.1.3", "invalid.2.3", true},
-		{"fallback empty segments", "invalid-no-digits", "1.0.0", false},
+		{"unparseable actual", "invalid-no-digits", "1.0.0", true},
 		{"fallback more segments higher", "1.2.3.4", "1.2.3", false},
 		{"fallback more segments lower", "1.2.3", "1.2.3.4", true},
 	}

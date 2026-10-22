@@ -44,7 +44,8 @@ func DefaultVersionParser(name, output string) string {
 }
 
 // CompareVersions checks if actual meets or exceeds the minimum version requirement min.
-// Returns nil if satisfied, or an error if actual is below min.
+// Returns nil if satisfied, or an error if actual is below min, empty, or not a
+// recognizable version: a check that cannot read a version never passes.
 func CompareVersions(actual, min string) error {
 	actual = strings.TrimSpace(actual)
 	min = strings.TrimSpace(min)
@@ -55,7 +56,7 @@ func CompareVersions(actual, min string) error {
 	}
 
 	if actual == "" {
-		return nil
+		return fmt.Errorf("no version to compare with required minimum %s", min)
 	}
 
 	// Use hashicorp/go-version for robust SemVer / CalVer / Segmented comparison
@@ -79,7 +80,7 @@ func fallbackCompareSegments(actStr, minStr string) error {
 	minParts := parseVersionDigits(minStr)
 
 	if len(actParts) == 0 {
-		return nil
+		return fmt.Errorf("version %q cannot be compared with required minimum %s", actStr, minStr)
 	}
 
 	maxLen := len(actParts)
