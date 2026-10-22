@@ -6,13 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 )
 
-// CommandRunner executes an external command.
+// CommandRunner executes an external command. Its errors must wrap the
+// underlying exec error with %w so a missing executable stays recognizable.
 type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // DefaultRunner is the default CommandRunner using os/exec with sanitized stderr errors.
@@ -357,13 +359,9 @@ func (m *Manager) UpdateAll(ctx context.Context) ([]string, error) {
 	return updated, nil
 }
 
+// isNotFound reports an executable that does not exist, as opposed to an
+// installed tool whose version check failed with a message mentioning a
+// missing file. Runners must wrap the exec error with %w to keep its kind.
 func isNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	if execErr, ok := err.(*exec.Error); ok && execErr.Err == exec.ErrNotFound {
-		return true
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "executable file not found") || strings.Contains(errStr, "not found")
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
 }

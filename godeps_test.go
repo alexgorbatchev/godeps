@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -467,17 +468,51 @@ func TestManager_Ensure(t *testing.T) {
 }
 
 func TestIsNotFound(t *testing.T) {
-	if isNotFound(nil) {
-		t.Errorf("isNotFound(nil) should be false")
+	missing := &exec.Error{Name: "tool", Err: exec.ErrNotFound}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"executable not in PATH", missing, true},
+		{"wrapped by a runner", fmt.Errorf("tool: %w: stderr", missing), true},
+		{"explicit path does not exist", &fs.PathError{Op: "fork/exec", Path: "/missing/tool", Err: fs.ErrNotExist}, true},
+		{"installed tool reports a missing file", errors.New("exit status 1: config file not found"), false},
+		{"generic failure", errors.New("generic error"), false},
 	}
-	if !isNotFound(&exec.Error{Err: exec.ErrNotFound}) {
-		t.Errorf("isNotFound(exec.ErrNotFound) should be true")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNotFound(tt.err); got != tt.want {
+				t.Errorf("isNotFound(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
-	if !isNotFound(errors.New("executable file not found in $PATH")) {
-		t.Errorf("isNotFound('executable file not found') should be true")
+}
+
+func TestVerifyReportsMissingOnlyForAbsentExecutables(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantMissing bool
+	}{
+		{"absent", &exec.Error{Name: "toolA", Err: exec.ErrNotFound}, true},
+		{"version check failed", errors.New("exit status 2: settings not found"), false},
 	}
-	if isNotFound(errors.New("generic error")) {
-		t.Errorf("isNotFound('generic error') should be false")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENT", "0")
+			mgr := New(Config{AppName: "testapp", Dependencies: []Dependency{{Name: "toolA", MinVersion: "1.0.0"}}, Runner: func(context.Context, string, ...string) ([]byte, error) {
+				return nil, tt.err
+			}})
+			reports, err := mgr.Verify(context.Background())
+			if err == nil || reports[0].Satisfied {
+				t.Fatalf("reports=%+v err=%v", reports, err)
+			}
+			if missing := strings.Contains(reports[0].Error, "missing in $PATH"); missing != tt.wantMissing {
+				t.Errorf("report error %q, want missing=%v", reports[0].Error, tt.wantMissing)
+			}
+		})
 	}
 }
 
