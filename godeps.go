@@ -37,10 +37,14 @@ func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, er
 	return stdout.Bytes(), nil
 }
 
-// IsAgentMode checks if AGENT=1 or AGENT=true is set in the environment.
+// IsAgentMode reports whether AGENT is 1, true, or yes, ignoring case and
+// surrounding whitespace.
 func IsAgentMode() bool {
-	val := strings.TrimSpace(os.Getenv("AGENT"))
-	return val == "1" || strings.EqualFold(val, "true")
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENT"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 // Cache defines optional key-value caching for dependency verification.

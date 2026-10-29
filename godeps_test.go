@@ -48,27 +48,20 @@ func (m *memoryCache) Delete(key string) error {
 }
 
 func TestIsAgentMode(t *testing.T) {
+	t.Setenv("AGENT", "")
 	os.Unsetenv("AGENT")
 	if IsAgentMode() {
 		t.Errorf("IsAgentMode() = true, want false when AGENT is unset")
 	}
-
-	os.Setenv("AGENT", "1")
-	if !IsAgentMode() {
-		t.Errorf("IsAgentMode() = false, want true when AGENT=1")
+	for value, want := range map[string]bool{
+		"": false, "0": false, "false": false, "no": false,
+		"1": true, "true": true, "yes": true, "TRUE": true, "Yes": true, "  1  ": true,
+	} {
+		t.Setenv("AGENT", value)
+		if got := IsAgentMode(); got != want {
+			t.Errorf("IsAgentMode() with AGENT=%q = %v, want %v", value, got, want)
+		}
 	}
-
-	os.Setenv("AGENT", "true")
-	if !IsAgentMode() {
-		t.Errorf("IsAgentMode() = false, want true when AGENT=true")
-	}
-
-	os.Setenv("AGENT", "0")
-	if IsAgentMode() {
-		t.Errorf("IsAgentMode() = true, want false when AGENT=0")
-	}
-
-	os.Unsetenv("AGENT")
 }
 
 func TestDependencyReport_Summary(t *testing.T) {

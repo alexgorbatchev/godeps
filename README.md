@@ -15,7 +15,7 @@
 - **Built-in Archive Extractors**: Unpacks `.tar.gz`, `.zip`, and raw executable files with automatic permission management (`0755`).
 - **External Stderr Sanitizer**: Strips raw multiline Python tracebacks, Go panics, and Node.js stack frames, surfacing clean error messages.
 - **In-Place Self-Updates**: Upgrades the running CLI application directly from GitHub release assets.
-- **Agent-Ready & Safe Prompts**: Automatically disables interactive prompts when `AGENT=1` is set, and defaults interactive prompts to `[y/N]` rejection on Enter/EOF. Prompts and progress go to standard error (or `EnsureOptions.Output`), never standard output, so they cannot corrupt a program's machine-readable results.
+- **Agent-Ready & Safe Prompts**: Automatically disables interactive prompts when `AGENT` is `1`, `true`, or `yes` (any case), and defaults interactive prompts to `[y/N]` rejection on Enter/EOF. Prompts and progress go to standard error (or `EnsureOptions.Output`), never standard output, so they cannot corrupt a program's machine-readable results.
 - **Verified Installation**: `Ensure` and `InstallUnsatisfied` install missing tools and update outdated ones, and `Ensure` fails unless every dependency is satisfied afterward.
 
 ---
