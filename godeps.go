@@ -132,13 +132,17 @@ type EnsureOptions struct {
 
 // Ensure checks dependencies, injects managed PATH, and installs missing or
 // outdated dependencies when AutoInstall is set or an interactive user agrees.
-// It succeeds only when every dependency is satisfied afterward.
+// It succeeds only when every dependency is satisfied afterward, and returns
+// ctx.Err() without prompting or installing once ctx is done.
 func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 	_ = InitManagedPath(m.appName)
 
 	reports, err := m.Verify(ctx)
 	if err == nil {
 		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 
 	var o EnsureOptions
@@ -191,7 +195,8 @@ func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 	return nil
 }
 
-// Verify runs version checks across all declared dependencies.
+// Verify runs version checks across all declared dependencies. When ctx is
+// done, it returns ctx.Err(), since interrupted checks prove nothing.
 func (m *Manager) Verify(ctx context.Context) ([]DependencyReport, error) {
 	deps := m.dependencies
 	reports := make([]DependencyReport, len(deps))
@@ -278,6 +283,10 @@ func (m *Manager) Verify(ctx context.Context) ([]DependencyReport, error) {
 	}
 
 	wg.Wait()
+	// A check killed by cancellation says nothing about the dependency.
+	if err := ctx.Err(); err != nil {
+		return reports, err
+	}
 	return reports, firstErr
 }
 
@@ -332,6 +341,9 @@ func (m *Manager) InstallUnsatisfied(ctx context.Context) ([]string, error) {
 	_ = InitManagedPath(m.appName)
 
 	reports, _ := m.Verify(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var installed []string
 	var errs []error
 

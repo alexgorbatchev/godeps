@@ -1,6 +1,6 @@
 ---
 created_on: 2026-08-23 13:25
-last_modified: 2026-10-21 19:27
+last_modified: 2026-11-03 14:54
 status: current
 ---
 
@@ -50,7 +50,7 @@ just tidy
 - **Mandatory Testing & Coverage**: Any time code is changed such that results from running that code are changed, a test file must be changed as well, and **90% code coverage is required** (verified via `just test`).
 - **Standard Library First**: Maintain zero heavy external dependencies. Use standard library primitives for HTTP, archives, and process execution.
 - **Rate-Limit-Free HTTP Resolution**: Never query the GitHub REST API (`/repos/.../releases`) for release discovery; always use HTTP `HEAD /releases/latest` redirect headers to avoid unauthenticated rate limiting.
-- **Fail Closed**: A dependency is satisfied only when its version was read and compared successfully. Empty, unparseable, or unverifiable versions and installations that still do not satisfy the requirement are failures.
+- **Fail Closed**: A dependency is satisfied only when its version was read and compared successfully. Empty, unparseable, or unverifiable versions and installations that still do not satisfy the requirement are failures. A done context makes `Verify`, `Ensure`, and `InstallUnsatisfied` return `ctx.Err()`; never prompt or install after cancellation.
 - **Error Kinds Over Messages**: Classify errors with `errors.Is`/`errors.As`; never infer an error kind from message substrings.
 
 ### Ask First

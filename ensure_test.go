@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -149,6 +150,61 @@ func TestInstallUnsatisfiedUpdatesInstalledTools(t *testing.T) {
 			}
 			if calls := strings.Join(tt.tool.calls, ","); calls != tt.wantCalls || len(installed) != len(tt.tool.calls) {
 				t.Errorf("calls %q installed %v, want %q", calls, installed, tt.wantCalls)
+			}
+		})
+	}
+}
+
+// interruptedTool simulates a version check killed when its context ends.
+type interruptedTool struct {
+	started chan struct{}
+	once    sync.Once
+	calls   []string
+}
+
+func (f *interruptedTool) Install(context.Context, string) error {
+	f.calls = append(f.calls, "install")
+	return nil
+}
+
+func (f *interruptedTool) Update(context.Context, string) error {
+	f.calls = append(f.calls, "update")
+	return nil
+}
+
+func (f *interruptedTool) run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	f.once.Do(func() { close(f.started) })
+	<-ctx.Done()
+	return nil, errors.New("signal: killed")
+}
+
+func TestCancelledChecksNeverPromptOrInstall(t *testing.T) {
+	t.Setenv("AGENT", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	for _, operation := range []string{"ensure", "verify", "install unsatisfied"} {
+		t.Run(operation, func(t *testing.T) {
+			tool := &interruptedTool{started: make(chan struct{})}
+			m := New(Config{AppName: "testapp", Runner: tool.run, Dependencies: []Dependency{{Name: "toolA", MinVersion: "1.4.0", Installer: tool}}})
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				<-tool.started
+				cancel()
+			}()
+			var out bytes.Buffer
+			var err error
+			switch operation {
+			case "ensure":
+				err = m.Ensure(ctx, EnsureOptions{Output: &out, Input: strings.NewReader("y\n")})
+			case "verify":
+				_, err = m.Verify(ctx)
+			default:
+				_, err = m.InstallUnsatisfied(ctx)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("got %v, want context.Canceled", err)
+			}
+			if out.Len() != 0 || len(tool.calls) != 0 {
+				t.Fatalf("cancelled check prompted %q or installed %v", out.String(), tool.calls)
 			}
 		})
 	}
