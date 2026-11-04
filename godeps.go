@@ -24,7 +24,22 @@ type CommandRunner func(ctx context.Context, name string, args ...string) ([]byt
 // CommandContext, so cancellation terminates it gracefully, and returns errors
 // carrying the command's sanitized standard error.
 func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := CommandContext(ctx, name, args...)
+	return runCaptured(CommandContext(ctx, name, args...))
+}
+
+// packageManagerRunner runs the commands of SystemPackageManager installers.
+var packageManagerRunner CommandRunner = runPackageManager
+
+// runPackageManager runs a package manager in the terminal's process group, so
+// it can prompt for input such as a sudo password, which a background process
+// group cannot read. Cancellation still sends SIGTERM first.
+func runPackageManager(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return runCaptured(foregroundCommandContext(ctx, name, args...))
+}
+
+// runCaptured runs cmd and returns its standard output, or an error carrying
+// its sanitized standard error.
+func runCaptured(cmd *exec.Cmd) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

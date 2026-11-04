@@ -32,3 +32,14 @@ func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd 
 	terminateGracefully(cmd, terminationGracePeriod)
 	return cmd
 }
+
+// foregroundCommandContext is exec.CommandContext for a command that may need
+// the terminal. The command stays in the caller's process group, so it can read
+// from the terminal and receives terminal interrupts directly. Cancellation
+// asks it to terminate (SIGTERM on Unix) and kills it after the grace period.
+func foregroundCommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = terminationGracePeriod
+	requestTermination(cmd)
+	return cmd
+}

@@ -48,3 +48,9 @@ func killGroupAfter(group int, grace time.Duration) {
 	}
 	_ = syscall.Kill(-group, syscall.SIGKILL)
 }
+
+// requestTermination makes cancellation send SIGTERM to cmd's process; its
+// WaitDelay then bounds how long it may take to exit before it is killed.
+func requestTermination(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+}

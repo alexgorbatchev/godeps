@@ -1,4 +1,4 @@
-module github.com/alexgorbatchev/godeps
+module github.com/alexgorbatchev/godeps/v2
 
 go 1.26.2
 

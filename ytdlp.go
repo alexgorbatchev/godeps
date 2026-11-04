@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // ytDlpName is the executable name yt-dlp is invoked by, and the name of its
@@ -82,6 +83,7 @@ func InstallYtDlpForPlatform(ctx context.Context, goos, goarch, targetDir string
 	}
 	downloadURL := fmt.Sprintf("%s/yt-dlp/yt-dlp/releases/latest/download/%s", strings.TrimRight(githubBaseURL, "/"), asset.archive)
 
+	removeStaleLeftovers(targetDir, "."+ytDlpName+"-")
 	archive, err := os.CreateTemp(targetDir, "."+ytDlpName+"-*.zip")
 	if err != nil {
 		return fmt.Errorf("creating yt-dlp download file: %w", err)
@@ -134,6 +136,31 @@ func InstallYtDlpForPlatform(ctx context.Context, goos, goarch, targetDir string
 	return nil
 }
 
+// staleLeftoverAge is how old an installer's download or staging entry must be
+// before a later installation removes it. It is far longer than any
+// installation takes, so a concurrent installation keeps its own entries.
+const staleLeftoverAge = time.Hour
+
+// removeStaleLeftovers removes entries in dir whose names start with prefix and
+// that were last modified more than staleLeftoverAge ago. They are downloads,
+// staging trees, and set-aside previous installations left behind when an
+// installation was killed before its own cleanup ran.
+func removeStaleLeftovers(dir, prefix string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-staleLeftoverAge)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
 // replaceDir moves the directory staged to dest, replacing any file or
 // directory already there. It restores the previous dest if the move fails.
 func replaceDir(staged, dest string) error {
@@ -160,8 +187,10 @@ func replaceDir(staged, dest string) error {
 }
 
 // extractZipTree extracts every entry of the zip archive at archivePath into
-// destDir, preserving file permissions and relative symbolic links. It rejects
-// entries and link targets that would land outside destDir.
+// destDir, preserving file permissions and relative symbolic links. All writes
+// go through an os.Root, so neither an entry name nor a chain of extracted
+// links can place anything outside destDir; link targets must also stay inside
+// the archive root.
 func extractZipTree(archivePath, destDir string) error {
 	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -169,20 +198,25 @@ func extractZipTree(archivePath, destDir string) error {
 	}
 	defer zr.Close()
 
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("opening extraction directory: %w", err)
+	}
+	defer root.Close()
+
 	for _, f := range zr.File {
 		name := filepath.FromSlash(strings.TrimSuffix(f.Name, "/"))
 		if !filepath.IsLocal(name) {
 			return fmt.Errorf("archive entry %q is outside the archive root", f.Name)
 		}
-		path := filepath.Join(destDir, name)
 		mode := f.Mode()
 		switch {
 		case mode.IsDir():
-			err = os.MkdirAll(path, 0o755)
+			err = root.MkdirAll(name, 0o755)
 		case mode&fs.ModeSymlink != 0:
-			err = extractZipSymlink(f, name, path)
+			err = extractZipSymlink(root, f, name)
 		case mode.IsRegular():
-			err = extractZipFile(f, path, mode.Perm())
+			err = extractZipFile(root, f, name, mode.Perm())
 		default:
 			err = fmt.Errorf("unsupported file type %s", mode.Type())
 		}
@@ -193,8 +227,8 @@ func extractZipTree(archivePath, destDir string) error {
 	return nil
 }
 
-func extractZipFile(f *zip.File, path string, perm fs.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func extractZipFile(root *os.Root, f *zip.File, name string, perm fs.FileMode) error {
+	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 		return err
 	}
 	src, err := f.Open()
@@ -203,7 +237,7 @@ func extractZipFile(f *zip.File, path string, perm fs.FileMode) error {
 	}
 	defer src.Close()
 	// The owner always needs to read and replace the installed files.
-	dst, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm|0o600)
+	dst, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm|0o600)
 	if err != nil {
 		return err
 	}
@@ -214,7 +248,7 @@ func extractZipFile(f *zip.File, path string, perm fs.FileMode) error {
 	return err
 }
 
-func extractZipSymlink(f *zip.File, name, path string) error {
+func extractZipSymlink(root *os.Root, f *zip.File, name string) error {
 	src, err := f.Open()
 	if err != nil {
 		return err
@@ -228,8 +262,8 @@ func extractZipSymlink(f *zip.File, name, path string) error {
 	if filepath.IsAbs(link) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), link)) {
 		return fmt.Errorf("symbolic link target %q is outside the archive root", target)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 		return err
 	}
-	return os.Symlink(link, path)
+	return root.Symlink(link, name)
 }

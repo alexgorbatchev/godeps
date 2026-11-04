@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type zipEntry struct {
@@ -243,6 +244,11 @@ func TestInstallYtDlpFailureKeepsPreviousInstall(t *testing.T) {
 		{name: "archive without the executable", archive: buildZip(t, zipEntry{name: "_internal/lib", mode: 0o644})},
 		{name: "entry outside the archive root", archive: buildZip(t, zipEntry{name: "../escaped", mode: 0o644}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "link outside the archive root", archive: buildZip(t, zipEntry{name: "_internal/escaped", mode: fs.ModeSymlink | 0o777, body: "../../escaped"}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+		{name: "write through a chain of links", archive: buildZip(t,
+			zipEntry{name: "a/b/l1", mode: fs.ModeSymlink | 0o777, body: ".."},
+			zipEntry{name: "a/b/l2", mode: fs.ModeSymlink | 0o777, body: "l1/../.."},
+			zipEntry{name: "a/b/l2/escaped", mode: 0o644},
+			zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "absolute link", archive: buildZip(t, zipEntry{name: "escaped", mode: fs.ModeSymlink | 0o777, body: "/etc"}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "unsupported entry type", archive: buildZip(t, zipEntry{name: "pipe", mode: fs.ModeNamedPipe | 0o644}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "duplicate entries", archive: buildZip(t, zipEntry{name: "yt-dlp_macos", mode: 0o755}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
@@ -352,5 +358,35 @@ func TestReplaceDirRestoresPreviousInstallWhenMoveFails(t *testing.T) {
 	}
 	if names := dirNames(t, targetDir); !slices.Equal(names, []string{"yt-dlp"}) {
 		t.Errorf("target directory holds %v, want only yt-dlp", names)
+	}
+}
+
+// An installation killed before its cleanup leaves dot-prefixed downloads and
+// staging trees behind; a later installation removes them unless they are
+// recent enough to belong to an installation still running.
+func TestInstallYtDlpRemovesStaleLeftovers(t *testing.T) {
+	serveReleases(t, map[string][]byte{"yt-dlp_macos.zip": unpackedBuild(t, "yt-dlp_macos")})
+	targetDir := t.TempDir()
+	old := time.Now().Add(-2 * staleLeftoverAge)
+	for _, name := range []string{".yt-dlp-1.zip", ".yt-dlp-2/_internal/lib.so", ".yt-dlp-old-3/yt-dlp/yt-dlp", ".yt-dlp-recent/lib.so", ".other-tool-4/lib.so"} {
+		path := filepath.Join(targetDir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("leftover"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{".yt-dlp-1.zip", ".yt-dlp-2", ".yt-dlp-old-3", ".other-tool-4"} {
+		if err := os.Chtimes(filepath.Join(targetDir, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := InstallYtDlpForPlatform(context.Background(), "darwin", "arm64", targetDir); err != nil {
+		t.Fatal(err)
+	}
+	if names := dirNames(t, targetDir); !slices.Equal(names, []string{".other-tool-4", ".yt-dlp-recent", "yt-dlp"}) {
+		t.Errorf("target directory holds %v, want stale yt-dlp leftovers removed and the rest kept", names)
 	}
 }

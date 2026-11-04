@@ -19,9 +19,8 @@ import (
 )
 
 var (
-	githubBaseURL        = "https://github.com"
-	packageManagerRunner = DefaultRunner
-	lookPathFunc         = exec.LookPath
+	githubBaseURL = "https://github.com"
+	lookPathFunc  = exec.LookPath
 )
 
 // Installer defines how a dependency is installed and updated.

@@ -156,3 +156,32 @@ func TestCancelAfterExitReportsProcessDone(t *testing.T) {
 		t.Errorf("Cancel() after exit = %v, want os.ErrProcessDone", err)
 	}
 }
+
+// Package managers may prompt through the terminal, so they stay in the
+// caller's process group, and cancellation still sends SIGTERM first.
+func TestPackageManagerRunnerStaysInForegroundGroup(t *testing.T) {
+	withGracePeriod(t, 5*time.Second)
+	log := filepath.Join(t.TempDir(), "log")
+	t.Setenv("LOG", log)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := runPackageManager(ctx, "sh", "-c", `trap 'echo term >> "$LOG"; exit 0' TERM; echo $$ >> "$LOG"; while :; do sleep 0.05; done`)
+		done <- err
+	}()
+	pid, _ := strconv.Atoi(waitForLines(t, log, 1)[0])
+	group, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group != syscall.Getpgrp() {
+		t.Errorf("package manager runs in process group %d, want the caller's group %d", group, syscall.Getpgrp())
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Error("runPackageManager succeeded for a cancelled command")
+	}
+	if lines := waitForLines(t, log, 2); lines[1] != "term" {
+		t.Errorf("log %v, want SIGTERM on cancellation", lines)
+	}
+}
