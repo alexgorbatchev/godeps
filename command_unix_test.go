@@ -49,15 +49,19 @@ func processAlive(pid int) bool {
 }
 
 // A shell that records SIGTERM in $LOG, starts a subprocess that does the
-// same, and waits. ignore makes both keep running after SIGTERM.
-func groupScript(ignore bool) string {
-	onTerm := "exit 0"
-	if ignore {
-		onTerm = ":"
-	}
-	return `trap 'echo child-term >> "$LOG"; ` + onTerm + `' TERM
-sh -c 'trap "echo grandchild-term >> \"$LOG\"; ` + onTerm + `" TERM; echo $$ >> "$LOG"; while :; do sleep 0.05; done' &
+// same, and waits. ignoreChild and ignoreSubprocess make the shell and its
+// subprocess keep running after SIGTERM.
+func groupScript(ignoreChild, ignoreSubprocess bool) string {
+	return `trap 'echo child-term >> "$LOG"; ` + termAction(ignoreChild) + `' TERM
+sh -c 'trap "echo grandchild-term >> \"$LOG\"; ` + termAction(ignoreSubprocess) + `" TERM; echo $$ >> "$LOG"; while :; do sleep 0.05; done' &
 while :; do sleep 0.05; done`
+}
+
+func termAction(ignore bool) string {
+	if ignore {
+		return ":"
+	}
+	return "exit 0"
 }
 
 func TestCommandContextTerminatesProcessGroupGracefully(t *testing.T) {
@@ -65,7 +69,7 @@ func TestCommandContextTerminatesProcessGroupGracefully(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "log")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := CommandContext(ctx, "sh", "-c", groupScript(false))
+	cmd := CommandContext(ctx, "sh", "-c", groupScript(false, false))
 	cmd.Env = append(os.Environ(), "LOG="+log)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -99,7 +103,7 @@ func TestCommandContextKillsProcessGroupAfterGracePeriod(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "log")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := CommandContext(ctx, "sh", "-c", groupScript(true))
+	cmd := CommandContext(ctx, "sh", "-c", groupScript(true, true))
 	cmd.Env = append(os.Environ(), "LOG="+log)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -138,12 +142,9 @@ func TestCommandContextWaitOutlastsGroupMembersIgnoringSIGTERM(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "log")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	script := `trap 'echo child-term >> "$LOG"; exit 0' TERM
-sh -c 'trap "echo grandchild-term >> \"$LOG\"" TERM; echo $$ >> "$LOG"; while :; do sleep 0.05; done' &
-while :; do sleep 0.05; done`
 	// Leaving Stdout and Stderr unset gives the command no output pipes to wait
 	// for, so only the process group can hold Wait back.
-	cmd := CommandContext(ctx, "sh", "-c", script)
+	cmd := CommandContext(ctx, "sh", "-c", groupScript(false, true))
 	cmd.Env = append(os.Environ(), "LOG="+log)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -186,7 +187,7 @@ func TestDefaultRunnerTerminatesGracefully(t *testing.T) {
 		pollLines(log, 1)
 		cancel()
 	}()
-	if _, err := DefaultRunner(ctx, "sh", "-c", groupScript(false)); err == nil {
+	if _, err := DefaultRunner(ctx, "sh", "-c", groupScript(false, false)); err == nil {
 		t.Fatal("DefaultRunner succeeded for a cancelled command")
 	}
 	if lines := waitForLines(t, log, 3); !strings.Contains(strings.Join(lines, " "), "child-term") {

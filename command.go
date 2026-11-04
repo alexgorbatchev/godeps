@@ -25,8 +25,10 @@ var terminationGracePeriod = 5 * time.Second
 // On Windows, which has no SIGTERM, cancellation kills the process as
 // exec.CommandContext does.
 //
-// On every platform, Wait gives up on output held open by subprocesses outside
-// the command's process group after the same grace period.
+// Wait then gives up on output still held open after another grace period:
+// on Unix by processes outside the command's process group, counted from when
+// the group was stopped; on Windows by orphaned subprocesses, counted from the
+// kill.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = terminationGracePeriod

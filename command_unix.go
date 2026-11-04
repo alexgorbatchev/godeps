@@ -37,7 +37,8 @@ func terminateGracefully(cmd *exec.Cmd, grace time.Duration) {
 
 // stopGroup waits up to grace for every member of the process group to exit,
 // then sends SIGKILL to those still running. It returns as soon as the group
-// is gone, so it never signals a group ID the system has reused.
+// is gone, which limits the chance of signaling a reused group ID to the one
+// poll interval before the SIGKILL.
 func stopGroup(group int, grace time.Duration) {
 	deadline := time.Now().Add(grace)
 	ticker := time.NewTicker(groupPollInterval)
