@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -367,9 +368,22 @@ func TestInstallPackage_OSBranches(t *testing.T) {
 		t.Errorf("expected error for unsupported OS")
 	}
 
-	// A nil runner selects DefaultRunner; without a package manager nothing runs.
-	if err := InstallPackage(ctx, "ffmpeg", nil); err == nil {
-		t.Errorf("expected error without a package manager")
+	// A nil runner selects the package-manager runner.
+	var ran []string
+	oldRunner := packageManagerRunner
+	t.Cleanup(func() { packageManagerRunner = oldRunner })
+	packageManagerRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	lookPathFunc = func(file string) (string, error) {
+		return "/usr/bin/" + file, nil
+	}
+	if err := installPackageForOS(ctx, "darwin", "ffmpeg", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ran, []string{"brew install ffmpeg"}) {
+		t.Errorf("nil runner ran %v, want brew through the package-manager runner", ran)
 	}
 }
 

@@ -162,7 +162,7 @@ The process group is not the terminal's foreground group, so Ctrl+C reaches only
 
 On Windows, which has no SIGTERM, cancellation kills the process as `exec.CommandContext` does.
 
-`SystemPackageManager` installers are the exception: package managers may prompt through the terminal, for example for a sudo password, so they run in your program's process group. Cancellation sends them SIGTERM and kills them 5 seconds later.
+`SystemPackageManager` installers, and `InstallPackage` with a nil runner, are the exception: package managers may prompt through the terminal, for example for a sudo password, so they run in your program's process group. Cancellation sends them SIGTERM and kills them 5 seconds later.
 
 ---
 

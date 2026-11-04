@@ -363,13 +363,15 @@ func downloadFile(ctx context.Context, downloadURL string, out io.Writer) error 
 }
 
 // InstallPackage attempts to install a system package using host package managers (brew, apt, pacman, etc.).
+// A nil runner runs the package manager as SystemPackageManager does: in the
+// caller's process group, so it can prompt through the terminal.
 func InstallPackage(ctx context.Context, packageName string, runner CommandRunner) error {
 	return installPackageForOS(ctx, runtime.GOOS, packageName, runner)
 }
 
 func installPackageForOS(ctx context.Context, goos, packageName string, runner CommandRunner) error {
 	if runner == nil {
-		runner = DefaultRunner
+		runner = packageManagerRunner
 	}
 
 	switch goos {
