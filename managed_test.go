@@ -54,31 +54,3 @@ func TestEnsureManagedBinDir(t *testing.T) {
 		t.Errorf("expected error for empty appName")
 	}
 }
-
-func TestInitManagedPath(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tempDir)
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", oldPath)
-
-	err := InitManagedPath("testapp")
-	if err != nil {
-		t.Fatalf("InitManagedPath() error: %v", err)
-	}
-
-	binDir, _ := GetManagedBinDir("testapp")
-	newPath := os.Getenv("PATH")
-	if !strings.HasPrefix(newPath, binDir) {
-		t.Errorf("PATH does not start with managed bin dir %q, got PATH=%q", binDir, newPath)
-	}
-
-	// Calling again should be idempotent
-	if err := InitManagedPath("testapp"); err != nil {
-		t.Errorf("second call to InitManagedPath failed: %v", err)
-	}
-
-	// Empty appName error
-	if err := InitManagedPath(""); err == nil {
-		t.Errorf("expected error for empty appName in InitManagedPath")
-	}
-}

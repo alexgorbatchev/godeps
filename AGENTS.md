@@ -1,6 +1,6 @@
 ---
 created_on: 2026-08-23 13:25
-last_modified: 2026-11-04 10:50
+last_modified: 2026-11-04 11:10
 status: current
 ---
 
@@ -42,8 +42,10 @@ CI (`.github/workflows/ci.yml`) runs `just tidy`, `just build`, `just vet`, and 
 ### Core Package Components
 - **`godeps.go`**: Core orchestration engine (`Manager`, `Config`, `Dependency`, `DependencyReport`, `Ensure`, `Verify`).
 - **`compare.go`**: Multi-format version parser and comparator powered by `hashicorp/go-version` supporting SemVer, CalVer (`YYYY.MM.DD`), development builds (`dev`, `git-master`), and output banner stripping.
-- **`managed.go`**: XDG Base Directory resolution (`$XDG_DATA_HOME/<appName>/bin`) and dynamic runtime `$PATH` injection.
-- **`installer.go`**: Rate-limit-free GitHub release resolver (`HEAD /releases/latest` redirect headers), `.tar.gz`/`.zip` archive extractors, standalone binary downloaders, and OS package manager wrappers (`brew`, `apt-get`, `pacman`, `dnf`, `winget`, `choco`).
+- **`managed.go`**: XDG Base Directory resolution (`$XDG_DATA_HOME/<appName>/bin`) and runtime `$PATH` placement. The managed directories are `bin/` (single-file executables) and package directories `bin/<name>/` (directory-tree builds with the entry point `bin/<name>/<name>`); dot-prefixed subdirectories are installer staging and never go on `PATH`. `InitManagedPath(appName)` appends missing managed directories. `Manager.InitManagedPath(ctx)` keeps a copy elsewhere on `PATH` that meets `MinVersion` ahead of the managed copy, and moves a dependency's managed directory to the front only when the other copy is below `MinVersion` and the managed copy is not.
+- **`command.go`**, **`command_unix.go`**, **`command_other.go`**: `CommandContext`, used by `DefaultRunner`. On Unix the child runs in its own process group; cancellation sends SIGTERM to the group, then SIGKILL to surviving members after `terminationGracePeriod` (5 seconds), which also bounds `WaitDelay`. Other platforms keep the default kill.
+- **`ytdlp.go`**: Installs yt-dlp's unpacked (PyInstaller one-folder) release zip for the platform into `bin/yt-dlp/`, renaming the archive's executable to `yt-dlp`/`yt-dlp.exe`. It stages next to the package directory, swaps it into place, and removes an obsolete one-file build. Updating re-downloads; never use `yt-dlp -U`, which unpacked builds do not support. Never install the one-file builds, which unpack into the system temporary directory on every run and leak it when killed.
+- **`installer.go`**: Rate-limit-free GitHub release resolver (`HEAD /releases/latest` redirect headers), `.tar.gz`/`.zip` single-binary extractors, standalone binary downloaders, and OS package manager wrappers (`brew`, `apt-get`, `pacman`, `dnf`, `winget`, `choco`).
 - **`sanitize.go`**: External command stderr cleaner stripping multiline Python tracebacks, Go panics, and Node.js stack traces.
 - **`selfupdate.go`**: In-place running application self-upgrades without GitHub token requirements.
 
@@ -56,6 +58,7 @@ CI (`.github/workflows/ci.yml`) runs `just tidy`, `just build`, `just vet`, and 
 - **Standard Library First**: Maintain zero heavy external dependencies. Use standard library primitives for HTTP, archives, and process execution.
 - **Rate-Limit-Free HTTP Resolution**: Never query the GitHub REST API (`/repos/.../releases`) for release discovery; always use HTTP `HEAD /releases/latest` redirect headers to avoid unauthenticated rate limiting.
 - **Fail Closed**: A dependency is satisfied only when its version was read and compared successfully. Empty, unparseable, or unverifiable versions and installations that still do not satisfy the requirement are failures. A done context makes `Verify`, `Ensure`, and `InstallUnsatisfied` return `ctx.Err()`; never prompt or install after cancellation.
+- **Graceful Subprocesses**: Start every subprocess the package runs through `CommandContext`; never use bare `exec.CommandContext`, whose cancellation SIGKILLs only the direct child.
 - **Error Kinds Over Messages**: Classify errors with `errors.Is`/`errors.As`; never infer an error kind from message substrings.
 
 ### Ask First

@@ -320,85 +320,6 @@ func TestDownloadDirectBinary(t *testing.T) {
 	}
 }
 
-func TestInstallYtDlpForPlatform(t *testing.T) {
-	tempDir := t.TempDir()
-	var requestedPaths []string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestedPaths = append(requestedPaths, r.URL.Path)
-		w.Write([]byte("mock yt-dlp binary"))
-	}))
-	defer ts.Close()
-
-	oldBase := githubBaseURL
-	githubBaseURL = ts.URL
-	defer func() { githubBaseURL = oldBase }()
-
-	ctx := context.Background()
-	tests := []struct {
-		goos     string
-		goarch   string
-		wantPath string
-	}{
-		{"darwin", "arm64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"},
-		{"darwin", "amd64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"},
-		{"windows", "amd64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"},
-		{"linux", "arm64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64"},
-		{"linux", "amd64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"},
-		{"freebsd", "amd64", "/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"},
-	}
-
-	for _, tt := range tests {
-		requestedPaths = nil
-		err := InstallYtDlpForPlatform(ctx, tt.goos, tt.goarch, tempDir)
-		if err != nil {
-			t.Fatalf("InstallYtDlpForPlatform(%s, %s) error: %v", tt.goos, tt.goarch, err)
-		}
-		if len(requestedPaths) == 0 || requestedPaths[len(requestedPaths)-1] != tt.wantPath {
-			t.Errorf("InstallYtDlpForPlatform(%s, %s) requested %v, want %s", tt.goos, tt.goarch, requestedPaths, tt.wantPath)
-		}
-	}
-
-	// Wrapper test
-	if err := InstallYtDlp(ctx, tempDir); err != nil {
-		t.Errorf("InstallYtDlp wrapper failed: %v", err)
-	}
-}
-
-func TestUpdateYtDlp(t *testing.T) {
-	ctx := context.Background()
-	tempDir := t.TempDir()
-
-	// 1. Success via runner
-	okRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("yt-dlp is up to date"), nil
-	}
-	if err := UpdateYtDlp(ctx, okRunner, tempDir); err != nil {
-		t.Errorf("UpdateYtDlp failed on success runner: %v", err)
-	}
-
-	// 2. Runner returns error -> fallback to download
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("#!/bin/sh\n"))
-	}))
-	defer ts.Close()
-
-	oldBase := githubBaseURL
-	githubBaseURL = ts.URL
-	defer func() { githubBaseURL = oldBase }()
-
-	errRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("ERROR: update failed"), errors.New("exit 1")
-	}
-	_ = UpdateYtDlp(ctx, errRunner, tempDir)
-
-	// 3. Default runner (nil runner arg) without a yt-dlp on PATH, so the test
-	// never updates a real installation.
-	t.Setenv("PATH", t.TempDir())
-	if err := UpdateYtDlp(ctx, nil, tempDir); err != nil {
-		t.Errorf("UpdateYtDlp with the default runner failed: %v", err)
-	}
-}
-
 func TestInstallPackage_OSBranches(t *testing.T) {
 	ctx := context.Background()
 	mockRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -487,14 +408,6 @@ func TestBuiltInInstallers(t *testing.T) {
 	}
 	if err := ghInstaller.Update(ctx, tempDir); err != nil {
 		t.Errorf("GitHubReleaseGoBinary.Update() error: %v", err)
-	}
-
-	ytInstaller := YtDlp()
-	if err := ytInstaller.Install(ctx, tempDir); err != nil {
-		t.Errorf("YtDlp().Install() error: %v", err)
-	}
-	if err := ytInstaller.Update(ctx, tempDir); err != nil {
-		t.Errorf("YtDlp().Update() error: %v", err)
 	}
 
 	pkgInstaller := SystemPackageManager("ffmpeg")

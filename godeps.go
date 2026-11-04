@@ -14,13 +14,17 @@ import (
 	"sync"
 )
 
-// CommandRunner executes an external command. Its errors must wrap the
+// CommandRunner executes an external command. name is a bare executable name
+// resolved through PATH, or an absolute path when a Manager compares a
+// dependency's managed copy with another copy on PATH. Its errors must wrap the
 // underlying exec error with %w so a missing executable stays recognizable.
 type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
-// DefaultRunner is the default CommandRunner using os/exec with sanitized stderr errors.
+// DefaultRunner is the default CommandRunner. It runs the command with
+// CommandContext, so cancellation terminates it gracefully, and returns errors
+// carrying the command's sanitized standard error.
 func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -62,6 +66,32 @@ type Dependency struct {
 	VersionArgs  []string
 	ParseVersion func(name, output string) string
 	Installer    Installer
+}
+
+func (d Dependency) versionArgs() []string {
+	if len(d.VersionArgs) == 0 {
+		return []string{"--version"}
+	}
+	return d.VersionArgs
+}
+
+func (d Dependency) parseVersion(output []byte) string {
+	parser := d.ParseVersion
+	if parser == nil {
+		parser = DefaultVersionParser
+	}
+	return parser(d.Name, string(output))
+}
+
+// satisfiedBy reports whether the executable at path reports a version that
+// meets dep's minimum.
+func (m *Manager) satisfiedBy(ctx context.Context, dep Dependency, path string) bool {
+	out, err := m.runner(ctx, path, dep.versionArgs()...)
+	if err != nil {
+		return false
+	}
+	version := dep.parseVersion(out)
+	return version != "" && CompareVersions(version, dep.MinVersion) == nil
 }
 
 // DependencyReport summarizes the status of a checked dependency.
@@ -130,12 +160,13 @@ type EnsureOptions struct {
 	Input io.Reader
 }
 
-// Ensure checks dependencies, injects managed PATH, and installs missing or
-// outdated dependencies when AutoInstall is set or an interactive user agrees.
-// It succeeds only when every dependency is satisfied afterward, and returns
-// ctx.Err() without prompting or installing once ctx is done.
+// Ensure places the managed directories on PATH with Manager.InitManagedPath,
+// checks dependencies, and installs missing or outdated dependencies when
+// AutoInstall is set or an interactive user agrees. It succeeds only when
+// every dependency is satisfied afterward, and returns ctx.Err() without
+// prompting or installing once ctx is done.
 func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
-	_ = InitManagedPath(m.appName)
+	_ = m.InitManagedPath(ctx)
 
 	reports, err := m.Verify(ctx)
 	if err == nil {
@@ -186,8 +217,7 @@ func (m *Manager) Ensure(ctx context.Context, opts ...EnsureOptions) error {
 		return fmt.Errorf("auto-installing dependencies: %w", installErr)
 	}
 	// An installer can succeed without providing a satisfying version, for
-	// example when its latest release is older than required or an older copy
-	// earlier in PATH still shadows the managed directory.
+	// example when its latest release is older than required.
 	if _, err := m.Verify(ctx); err != nil {
 		return fmt.Errorf("dependencies remain unsatisfied after installation: %w", err)
 	}
@@ -224,12 +254,7 @@ func (m *Manager) Verify(ctx context.Context) ([]DependencyReport, error) {
 			if m.cache != nil && m.cache.Get(cacheKey, &cachedStr) && cachedStr != "" {
 				out = []byte(cachedStr)
 			} else {
-				versionArgs := dep.VersionArgs
-				if len(versionArgs) == 0 {
-					versionArgs = []string{"--version"}
-				}
-
-				out, err = m.runner(ctx, dep.Name, versionArgs...)
+				out, err = m.runner(ctx, dep.Name, dep.versionArgs()...)
 				if err == nil && len(out) > 0 && m.cache != nil {
 					_ = m.cache.Put(cacheKey, string(out))
 				}
@@ -251,11 +276,7 @@ func (m *Manager) Verify(ctx context.Context) ([]DependencyReport, error) {
 				}
 			} else {
 				report.Installed = true
-				parser := dep.ParseVersion
-				if parser == nil {
-					parser = DefaultVersionParser
-				}
-				versionStr := parser(dep.Name, string(out))
+				versionStr := dep.parseVersion(out)
 				report.DetectedVersion = versionStr
 
 				if versionStr == "" {
@@ -290,31 +311,20 @@ func (m *Manager) Verify(ctx context.Context) ([]DependencyReport, error) {
 	return reports, firstErr
 }
 
-// Install installs a single dependency by name using its declared Installer.
+// Install installs a single dependency by name using its declared Installer,
+// then refreshes PATH with Manager.InitManagedPath so the new copy is used
+// when it should be.
 func (m *Manager) Install(ctx context.Context, depName string) error {
-	binDir, err := EnsureManagedBinDir(m.appName)
-	if err != nil {
-		return err
-	}
-
-	if m.cache != nil {
-		_ = m.cache.Delete(fmt.Sprintf("godeps_%s.json", depName))
-	}
-
-	for _, dep := range m.dependencies {
-		if strings.EqualFold(dep.Name, depName) {
-			if dep.Installer == nil {
-				return fmt.Errorf("no installer configured for dependency %q", depName)
-			}
-			return dep.Installer.Install(ctx, binDir)
-		}
-	}
-
-	return fmt.Errorf("unknown dependency %q", depName)
+	return m.runInstaller(ctx, depName, Installer.Install)
 }
 
-// Update updates a single dependency by name using its declared Installer.
+// Update updates a single dependency by name using its declared Installer,
+// then refreshes PATH with Manager.InitManagedPath.
 func (m *Manager) Update(ctx context.Context, depName string) error {
+	return m.runInstaller(ctx, depName, Installer.Update)
+}
+
+func (m *Manager) runInstaller(ctx context.Context, depName string, run func(Installer, context.Context, string) error) error {
 	binDir, err := EnsureManagedBinDir(m.appName)
 	if err != nil {
 		return err
@@ -329,16 +339,21 @@ func (m *Manager) Update(ctx context.Context, depName string) error {
 			if dep.Installer == nil {
 				return fmt.Errorf("no installer configured for dependency %q", depName)
 			}
-			return dep.Installer.Update(ctx, binDir)
+			if err := run(dep.Installer, ctx, binDir); err != nil {
+				return err
+			}
+			return m.InitManagedPath(ctx)
 		}
 	}
 
 	return fmt.Errorf("unknown dependency %q", depName)
 }
 
-// InstallUnsatisfied installs missing dependencies and updates outdated ones.
+// InstallUnsatisfied places the managed directories on PATH with
+// Manager.InitManagedPath, then installs missing dependencies and updates
+// outdated ones.
 func (m *Manager) InstallUnsatisfied(ctx context.Context) ([]string, error) {
-	_ = InitManagedPath(m.appName)
+	_ = m.InitManagedPath(ctx)
 
 	reports, _ := m.Verify(ctx)
 	if err := ctx.Err(); err != nil {
@@ -370,8 +385,6 @@ func (m *Manager) InstallUnsatisfied(ctx context.Context) ([]string, error) {
 
 // UpdateAll updates all declared dependencies.
 func (m *Manager) UpdateAll(ctx context.Context) ([]string, error) {
-	_ = InitManagedPath(m.appName)
-
 	var updated []string
 	var errs []error
 

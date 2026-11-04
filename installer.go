@@ -64,21 +64,6 @@ func (g *gitHubGoBinaryInstaller) Update(ctx context.Context, targetDir string) 
 	return DownloadAndExtractGoBinary(ctx, g.owner, g.repo, g.binName, targetDir)
 }
 
-// YtDlp creates an Installer for standalone yt-dlp executables with bundled Python runtime.
-func YtDlp() Installer {
-	return &ytDlpInstaller{}
-}
-
-type ytDlpInstaller struct{}
-
-func (y *ytDlpInstaller) Install(ctx context.Context, targetDir string) error {
-	return InstallYtDlp(ctx, targetDir)
-}
-
-func (y *ytDlpInstaller) Update(ctx context.Context, targetDir string) error {
-	return UpdateYtDlp(ctx, packageManagerRunner, targetDir)
-}
-
 // SystemPackageManager creates an Installer that uses the host system package manager (brew, apt, pacman, etc.).
 func SystemPackageManager(packageName string) Installer {
 	return &pkgManagerInstaller{pkgName: packageName}
@@ -197,29 +182,11 @@ func DownloadAndExtractGoBinary(ctx context.Context, owner, repo, binName, targe
 }
 
 func downloadAndExtractAsset(ctx context.Context, downloadURL, binName, targetDir string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating download request: %w", err)
+	var body bytes.Buffer
+	if err := downloadFile(ctx, downloadURL, &body); err != nil {
+		return err
 	}
-
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("downloading asset from %s: %w", downloadURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with HTTP %d from %s", resp.StatusCode, downloadURL)
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading download response body: %w", err)
-	}
+	bodyBytes := body.Bytes()
 
 	targetExt := ""
 	if runtime.GOOS == "windows" {
@@ -342,22 +309,6 @@ func extractZipBinary(data []byte, binName, destPath string) error {
 
 // DownloadDirectBinary downloads a single executable file and writes it to targetDir/binName.
 func DownloadDirectBinary(ctx context.Context, downloadURL, binName, targetDir string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating download request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("downloading binary from %s: %w", downloadURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("binary download failed with HTTP %d from %s", resp.StatusCode, downloadURL)
-	}
-
 	destPath := filepath.Join(targetDir, binName)
 	tmpPath := destPath + ".tmp"
 	_ = os.Remove(tmpPath)
@@ -366,13 +317,14 @@ func DownloadDirectBinary(ctx context.Context, downloadURL, binName, targetDir s
 	if err != nil {
 		return fmt.Errorf("creating temporary binary %q: %w", tmpPath, err)
 	}
-
-	if _, err := io.Copy(outFile, resp.Body); err != nil {
-		_ = outFile.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("writing downloaded binary: %w", err)
+	err = downloadFile(ctx, downloadURL, outFile)
+	if closeErr := outFile.Close(); err == nil {
+		err = closeErr
 	}
-	_ = outFile.Close()
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		_ = os.Remove(tmpPath)
@@ -387,45 +339,28 @@ func DownloadDirectBinary(ctx context.Context, downloadURL, binName, targetDir s
 	return nil
 }
 
-// InstallYtDlp downloads the OS/architecture-specific standalone yt-dlp binary into targetDir.
-func InstallYtDlp(ctx context.Context, targetDir string) error {
-	return InstallYtDlpForPlatform(ctx, runtime.GOOS, runtime.GOARCH, targetDir)
-}
-
-// InstallYtDlpForPlatform downloads the standalone yt-dlp binary for a specific OS and architecture.
-func InstallYtDlpForPlatform(ctx context.Context, goos, goarch, targetDir string) error {
-	binName := "yt-dlp"
-	assetName := "yt-dlp"
-
-	switch goos {
-	case "darwin":
-		assetName = "yt-dlp_macos"
-	case "windows":
-		binName = "yt-dlp.exe"
-		assetName = "yt-dlp.exe"
-	case "linux":
-		if goarch == "arm64" {
-			assetName = "yt-dlp_linux_aarch64"
-		} else {
-			assetName = "yt-dlp_linux"
-		}
+// downloadFile writes the body of a successful GET of downloadURL to out.
+func downloadFile(ctx context.Context, downloadURL string, out io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating download request: %w", err)
 	}
 
-	downloadURL := fmt.Sprintf("%s/yt-dlp/yt-dlp/releases/latest/download/%s", strings.TrimRight(githubBaseURL, "/"), assetName)
-	return DownloadDirectBinary(ctx, downloadURL, binName, targetDir)
-}
-
-// UpdateYtDlp attempts native yt-dlp -U update first, falling back to direct download.
-func UpdateYtDlp(ctx context.Context, runner CommandRunner, targetDir string) error {
-	if runner == nil {
-		runner = DefaultRunner
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", downloadURL, err)
 	}
-	out, err := runner(ctx, "yt-dlp", "-U")
-	if err == nil && !strings.Contains(strings.ToLower(string(out)), "error") {
-		return nil
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with HTTP %d from %s", resp.StatusCode, downloadURL)
 	}
 
-	return InstallYtDlp(ctx, targetDir)
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("writing download from %s: %w", downloadURL, err)
+	}
+	return nil
 }
 
 // InstallPackage attempts to install a system package using host package managers (brew, apt, pacman, etc.).
