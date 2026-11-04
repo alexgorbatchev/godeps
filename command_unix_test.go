@@ -130,6 +130,53 @@ func TestCommandContextKillsProcessGroupAfterGracePeriod(t *testing.T) {
 	}
 }
 
+// A command that exits on SIGTERM can leave a subprocess behind that ignores
+// it. Wait must not return before that subprocess is killed, or a caller that
+// exits right away takes the pending SIGKILL with it.
+func TestCommandContextWaitOutlastsGroupMembersIgnoringSIGTERM(t *testing.T) {
+	withGracePeriod(t, 300*time.Millisecond)
+	log := filepath.Join(t.TempDir(), "log")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := `trap 'echo child-term >> "$LOG"; exit 0' TERM
+sh -c 'trap "echo grandchild-term >> \"$LOG\"" TERM; echo $$ >> "$LOG"; while :; do sleep 0.05; done' &
+while :; do sleep 0.05; done`
+	// Leaving Stdout and Stderr unset gives the command no output pipes to wait
+	// for, so only the process group can hold Wait back.
+	cmd := CommandContext(ctx, "sh", "-c", script)
+	cmd.Env = append(os.Environ(), "LOG="+log)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	grandchild, _ := strconv.Atoi(waitForLines(t, log, 1)[0])
+	t.Cleanup(func() {
+		if processAlive(grandchild) {
+			_ = syscall.Kill(grandchild, syscall.SIGKILL)
+		}
+	})
+
+	start := time.Now()
+	cancel()
+	if err := cmd.Wait(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Wait() = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed < terminationGracePeriod {
+		t.Errorf("Wait returned after %v, before the %v grace period that the surviving subprocess needed", elapsed, terminationGracePeriod)
+	}
+	lines := waitForLines(t, log, 3)
+	if joined := strings.Join(lines, " "); !strings.Contains(joined, "child-term") || !strings.Contains(joined, "grandchild-term") {
+		t.Errorf("log %v, want SIGTERM delivered to the command and its subprocess", lines)
+	}
+	// SIGKILL was sent before Wait returned; allow only for its delivery.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for processAlive(grandchild) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if processAlive(grandchild) {
+		t.Errorf("subprocess %d ignoring SIGTERM outlived Wait", grandchild)
+	}
+}
+
 func TestDefaultRunnerTerminatesGracefully(t *testing.T) {
 	withGracePeriod(t, 5*time.Second)
 	log := filepath.Join(t.TempDir(), "log")

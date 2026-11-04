@@ -156,7 +156,7 @@ A package directory affects only its own dependency. Single-file executables sha
 
 ## Subprocess Cancellation
 
-`godeps.CommandContext(ctx, name, args...)` returns an `*exec.Cmd` like `exec.CommandContext`, and `DefaultRunner` uses it. On Unix, the command runs in its own process group. When `ctx` ends, the whole group receives SIGTERM, so tools can clean up and their own subprocesses stop too. Members still running 5 seconds later receive SIGKILL. `Wait` also stops waiting for output held open by orphaned subprocesses after those 5 seconds.
+`godeps.CommandContext(ctx, name, args...)` returns an `*exec.Cmd` like `exec.CommandContext`, and `DefaultRunner` uses it. On Unix, the command runs in its own process group. When `ctx` ends, the whole group receives SIGTERM, so tools can clean up and their own subprocesses stop too. Members still running 5 seconds later receive SIGKILL. After a cancellation, `Wait` (and so `Run`, `Output`, and `DefaultRunner`) returns only once every member of the group has exited or been sent SIGKILL, so your program can exit right away without leaving any of them running. `Wait` also stops waiting for output held open by subprocesses outside the group 5 seconds after that.
 
 The process group is not the terminal's foreground group, so Ctrl+C reaches only your program. Cancel the context on interrupt, for example with `signal.NotifyContext`, or the command keeps running after your program exits. Use it for non-interactive commands, since a background process group cannot read from the terminal.
 

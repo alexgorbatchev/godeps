@@ -16,16 +16,17 @@ var terminationGracePeriod = 5 * time.Second
 // On Unix, the command runs in its own process group. Cancellation sends
 // SIGTERM to the whole group and SIGKILL only to members still running after a
 // grace period, so a tool's own subprocesses stop too and a tool such as a
-// PyInstaller build can remove its temporary files. Because the group is not
-// the terminal's foreground group, a terminal interrupt does not reach the
-// command directly: cancel ctx on interrupt, for example with
-// signal.NotifyContext.
+// PyInstaller build can remove its temporary files. After a cancellation, Wait
+// returns only once every member of the group has exited or been sent SIGKILL,
+// so a program may exit as soon as Wait returns. Because the group is not the
+// terminal's foreground group, a terminal interrupt does not reach the command
+// directly: cancel ctx on interrupt, for example with signal.NotifyContext.
 //
 // On Windows, which has no SIGTERM, cancellation kills the process as
 // exec.CommandContext does.
 //
-// On every platform, Wait gives up on output held open by orphaned
-// subprocesses after the same grace period.
+// On every platform, Wait gives up on output held open by subprocesses outside
+// the command's process group after the same grace period.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = terminationGracePeriod

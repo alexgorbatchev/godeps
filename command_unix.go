@@ -16,7 +16,9 @@ const groupPollInterval = 20 * time.Millisecond
 
 // terminateGracefully starts cmd in its own process group and makes
 // cancellation send SIGTERM to the group, then SIGKILL to whatever is left of
-// it after grace.
+// it after grace. Cancel returns only once the group is gone or has been sent
+// SIGKILL, and Wait does not return before Cancel does, so a caller that exits
+// as soon as Wait returns leaves nothing running.
 func terminateGracefully(cmd *exec.Cmd, grace time.Duration) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -28,15 +30,15 @@ func terminateGracefully(cmd *exec.Cmd, grace time.Duration) {
 			}
 			return err
 		}
-		go killGroupAfter(group, grace)
+		stopGroup(group, grace)
 		return nil
 	}
 }
 
-// killGroupAfter sends SIGKILL to the process group if any member is still
-// running once grace has elapsed. It returns early when the group is gone, so
-// it never signals a group ID the system has reused.
-func killGroupAfter(group int, grace time.Duration) {
+// stopGroup waits up to grace for every member of the process group to exit,
+// then sends SIGKILL to those still running. It returns as soon as the group
+// is gone, so it never signals a group ID the system has reused.
+func stopGroup(group int, grace time.Duration) {
 	deadline := time.Now().Add(grace)
 	ticker := time.NewTicker(groupPollInterval)
 	defer ticker.Stop()
