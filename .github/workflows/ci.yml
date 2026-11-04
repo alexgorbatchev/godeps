@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: extractions/setup-just@v4
+
+      - name: Check module hygiene
+        run: just tidy
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: just vet
+
+      - name: Test
+        run: just test

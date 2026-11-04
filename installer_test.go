@@ -391,8 +391,12 @@ func TestUpdateYtDlp(t *testing.T) {
 	}
 	_ = UpdateYtDlp(ctx, errRunner, tempDir)
 
-	// 3. Default runner (nil runner arg)
-	_ = UpdateYtDlp(ctx, nil, tempDir)
+	// 3. Default runner (nil runner arg) without a yt-dlp on PATH, so the test
+	// never updates a real installation.
+	t.Setenv("PATH", t.TempDir())
+	if err := UpdateYtDlp(ctx, nil, tempDir); err != nil {
+		t.Errorf("UpdateYtDlp with the default runner failed: %v", err)
+	}
 }
 
 func TestInstallPackage_OSBranches(t *testing.T) {
@@ -433,7 +437,6 @@ func TestInstallPackage_OSBranches(t *testing.T) {
 	if err := InstallPackage(ctx, "ffmpeg", mockRunner); err != nil {
 		t.Errorf("InstallPackage wrapper failed: %v", err)
 	}
-	_ = InstallPackage(ctx, "ffmpeg", nil)
 
 	// Unsupported OS/package manager
 	lookPathFunc = func(file string) (string, error) {
@@ -442,11 +445,28 @@ func TestInstallPackage_OSBranches(t *testing.T) {
 	if err := installPackageForOS(ctx, "unknown_os", "ffmpeg", mockRunner); err == nil {
 		t.Errorf("expected error for unsupported OS")
 	}
+
+	// A nil runner selects DefaultRunner; without a package manager nothing runs.
+	if err := InstallPackage(ctx, "ffmpeg", nil); err == nil {
+		t.Errorf("expected error without a package manager")
+	}
 }
 
 func TestBuiltInInstallers(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
+
+	// Installers must never reach real package managers or tools from tests.
+	var pkgCalls []string
+	oldRunner, oldLookPath := packageManagerRunner, lookPathFunc
+	t.Cleanup(func() { packageManagerRunner, lookPathFunc = oldRunner, oldLookPath })
+	packageManagerRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		pkgCalls = append(pkgCalls, name+" "+strings.Join(args, " "))
+		return []byte("ok"), nil
+	}
+	lookPathFunc = func(file string) (string, error) {
+		return "/usr/bin/" + file, nil
+	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
@@ -478,11 +498,15 @@ func TestBuiltInInstallers(t *testing.T) {
 	}
 
 	pkgInstaller := SystemPackageManager("ffmpeg")
-	lookPathFunc = func(file string) (string, error) {
-		return "/usr/bin/" + file, nil
+	for _, install := range []func(context.Context, string) error{pkgInstaller.Install, pkgInstaller.Update} {
+		pkgCalls = nil
+		if err := install(ctx, tempDir); err != nil {
+			t.Errorf("SystemPackageManager installer error: %v", err)
+		}
+		if len(pkgCalls) != 1 || !strings.Contains(pkgCalls[0], "ffmpeg") {
+			t.Errorf("SystemPackageManager installer ran %v, want one ffmpeg installation", pkgCalls)
+		}
 	}
-	_ = pkgInstaller.Install(ctx, tempDir)
-	_ = pkgInstaller.Update(ctx, tempDir)
 
 	fInstaller := InstallerFunc(func(ctx context.Context, targetDir string) error {
 		return nil

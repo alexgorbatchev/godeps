@@ -1,6 +1,6 @@
 ---
 created_on: 2026-08-23 13:25
-last_modified: 2026-11-03 14:54
+last_modified: 2026-11-04 10:50
 status: current
 ---
 
@@ -15,10 +15,10 @@ Operational guidelines, architecture, and developer interface specifications for
 All development tasks must be executed using `just` recipes:
 
 ```bash
-# Run full unit test suite with race detector and coverage check
+# Run full unit test suite with race detector; fails below 90% statement coverage
 just test
 
-# Run static code analysis
+# Run static code analysis for the host and for Windows
 just vet
 
 # Format all Go source files
@@ -27,6 +27,8 @@ just fmt
 # Verify module hygiene
 just tidy
 ```
+
+CI (`.github/workflows/ci.yml`) runs `just tidy`, `go build`, `just vet`, and `just test` on Linux and macOS for pushes and pull requests to `main`.
 
 ---
 
