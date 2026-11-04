@@ -18,6 +18,9 @@ All development tasks must be executed using `just` recipes:
 # Run full unit test suite with race detector; fails below 90% statement coverage
 just test
 
+# Build for the host and for Windows
+just build
+
 # Run static code analysis for the host and for Windows
 just vet
 
@@ -28,7 +31,7 @@ just fmt
 just tidy
 ```
 
-CI (`.github/workflows/ci.yml`) runs `just tidy`, `go build`, `just vet`, and `just test` on Linux and macOS for pushes and pull requests to `main`.
+CI (`.github/workflows/ci.yml`) runs `just tidy`, `just build`, `just vet`, and `just test` on Linux and macOS for pushes and pull requests to `main`.
 
 ---
 
