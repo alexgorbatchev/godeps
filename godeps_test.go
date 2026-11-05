@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type memoryCache struct {
@@ -390,21 +391,44 @@ func TestVerifyReportsMissingOnlyForAbsentExecutables(t *testing.T) {
 }
 
 func TestDefaultRunner(t *testing.T) {
-	ctx := context.Background()
-	out, err := DefaultRunner(ctx, "echo", "hello")
+	executable, err := os.Executable()
 	if err != nil {
-		t.Fatalf("DefaultRunner echo failed: %v", err)
+		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(out)) != "hello" {
-		t.Errorf("unexpected output: %q", string(out))
+	tests := []struct {
+		mode    string
+		wantOut string
+		wantErr bool
+	}{
+		{mode: "stdout", wantOut: "hello"},
+		{mode: "stderr", wantErr: true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			t.Setenv("GODEPS_TEST_RUNNER", tt.mode)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			out, err := DefaultRunner(ctx, executable, "-test.run=^TestDefaultRunnerHelper$")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("DefaultRunner = %q, %v; want error=%v", out, err, tt.wantErr)
+			}
+			if strings.TrimSpace(string(out)) != tt.wantOut {
+				t.Errorf("output = %q, want %q", out, tt.wantOut)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), "Error: test failure") {
+				t.Errorf("expected sanitized error message, got: %v", err)
+			}
+		})
+	}
+}
 
-	// Command with error output
-	_, err = DefaultRunner(ctx, "sh", "-c", "echo 'Error: test failure' >&2; exit 1")
-	if err == nil {
-		t.Errorf("expected error from exit 1")
-	}
-	if !strings.Contains(err.Error(), "Error: test failure") {
-		t.Errorf("expected sanitized error message, got: %v", err)
+func TestDefaultRunnerHelper(t *testing.T) {
+	switch os.Getenv("GODEPS_TEST_RUNNER") {
+	case "stdout":
+		fmt.Fprintln(os.Stdout, "hello")
+		os.Exit(0)
+	case "stderr":
+		fmt.Fprintln(os.Stderr, "Error: test failure")
+		os.Exit(1)
 	}
 }

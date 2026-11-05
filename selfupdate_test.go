@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,14 +12,16 @@ import (
 
 func TestUpgradeSelfToPath(t *testing.T) {
 	tempDir := t.TempDir()
-	destPath := filepath.Join(tempDir, "myapp")
+	destPath := filepath.Join(tempDir, testBinaryName("myapp"))
+	const content = "upgraded binary content"
+	archive := createTestReleaseArchive(t, "myapp", content)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v2.0.0", http.StatusFound)
 			return
 		}
-		w.Write(createTestTarGz(t, "myapp", "#!/bin/sh\necho upgraded\n"))
+		w.Write(archive)
 	}))
 	defer ts.Close()
 
@@ -36,6 +39,9 @@ func TestUpgradeSelfToPath(t *testing.T) {
 	if ver != "2.0.0" {
 		t.Errorf("got version %q, want 2.0.0", ver)
 	}
+	if data, err := os.ReadFile(destPath); err != nil || string(data) != content {
+		t.Fatalf("upgraded binary = %q, err = %v; want %q", data, err, content)
+	}
 
 	// 2. Already latest version
 	_, err = UpgradeSelfToPath(ctx, "owner", "repo", "v2.0.0", destPath)
@@ -49,8 +55,10 @@ func TestUpgradeSelfToPath(t *testing.T) {
 		t.Errorf("expected dev version upgrade to succeed, got %v", err)
 	}
 
-	// 4. UpgradeSelf wrapper call
-	_, _ = UpgradeSelf(ctx, "owner", "repo", "v1.0.0")
+	// Exercise the wrapper without attempting to replace the running test binary.
+	if version, err := UpgradeSelf(ctx, "owner", "repo", "v2.0.0"); err == nil || version != "" {
+		t.Errorf("UpgradeSelf at latest version = %q, %v; want an error and no version", version, err)
+	}
 
 	// 5. Error resolving latest tag
 	tsErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

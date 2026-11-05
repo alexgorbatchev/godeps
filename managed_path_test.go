@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix || windows
 
 package godeps
 
@@ -12,22 +12,9 @@ import (
 	"testing"
 )
 
-// writeTool writes an executable script at dir/name that prints version.
-func writeTool(t *testing.T, dir, name, version string) string {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho "+version+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 // managedFixture isolates the managed directory and PATH for one test. Its
 // PATH holds a directory for copies installed outside the managed directory,
-// followed by the system directories the scripts need.
+// followed by an unrelated directory whose position must be preserved.
 type managedFixture struct {
 	binDir    string
 	globalDir string
@@ -41,7 +28,7 @@ func newManagedFixture(t *testing.T) managedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := managedFixture{binDir: binDir, globalDir: t.TempDir(), system: "/usr/bin" + string(os.PathListSeparator) + "/bin"}
+	f := managedFixture{binDir: binDir, globalDir: t.TempDir(), system: t.TempDir()}
 	t.Setenv("PATH", f.globalDir+string(os.PathListSeparator)+f.system)
 	return f
 }
@@ -67,14 +54,14 @@ func TestInitManagedPathAppendsManagedDirectories(t *testing.T) {
 	if err := InitManagedPath("testapp"); err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Join([]string{f.globalDir, "/usr/bin", "/bin", f.binDir, filepath.Join(f.binDir, "yt-dlp")}, string(os.PathListSeparator))
+	want := strings.Join([]string{f.globalDir, f.system, f.binDir, filepath.Join(f.binDir, "yt-dlp")}, string(os.PathListSeparator))
 	if got := os.Getenv("PATH"); got != want {
 		t.Fatalf("PATH = %q, want %q", got, want)
 	}
-	if got := resolve(t, "tool"); got != filepath.Join(f.globalDir, "tool") {
+	if got := resolve(t, "tool"); got != filepath.Join(f.globalDir, testBinaryName("tool")) {
 		t.Errorf("tool resolves to %q, want the copy outside the managed directory", got)
 	}
-	if got := resolve(t, "yt-dlp"); got != filepath.Join(f.binDir, "yt-dlp", "yt-dlp") {
+	if got := resolve(t, "yt-dlp"); got != filepath.Join(f.binDir, "yt-dlp", testBinaryName("yt-dlp")) {
 		t.Errorf("yt-dlp resolves to %q, want the managed package", got)
 	}
 
@@ -83,7 +70,7 @@ func TestInitManagedPathAppendsManagedDirectories(t *testing.T) {
 	if err := InitManagedPath("testapp"); err != nil {
 		t.Fatal(err)
 	}
-	want = strings.Join([]string{f.binDir, "/usr/bin", "/bin", filepath.Join(f.binDir, "yt-dlp")}, string(os.PathListSeparator))
+	want = strings.Join([]string{f.binDir, f.system, filepath.Join(f.binDir, "yt-dlp")}, string(os.PathListSeparator))
 	if got := os.Getenv("PATH"); got != want {
 		t.Errorf("PATH = %q, want %q", got, want)
 	}
@@ -224,16 +211,16 @@ func TestManagerInitManagedPathPrefersSatisfyingCopies(t *testing.T) {
 			if err := m.InitManagedPath(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			want := filepath.Join(managedDir, "yt-dlp")
+			want := filepath.Join(managedDir, testBinaryName("yt-dlp"))
 			if tt.wantGlobal {
-				want = filepath.Join(f.globalDir, "yt-dlp")
+				want = filepath.Join(f.globalDir, testBinaryName("yt-dlp"))
 			}
 			if got := resolve(t, "yt-dlp"); got != want {
 				t.Errorf("yt-dlp resolves to %q, want %q (PATH=%q)", got, want, os.Getenv("PATH"))
 			}
 			// Moving a package directory ahead never shadows another dependency.
 			if tt.pkg {
-				if got := resolve(t, "helper"); got != filepath.Join(f.globalDir, "helper") {
+				if got := resolve(t, "helper"); got != filepath.Join(f.globalDir, testBinaryName("helper")) {
 					t.Errorf("helper resolves to %q, want the global copy", got)
 				}
 			}
@@ -305,7 +292,7 @@ func TestEnsureUsesInstalledPackageOverOutdatedGlobalCopy(t *testing.T) {
 	if len(calls) != 1 || calls[0] != f.binDir {
 		t.Errorf("installer calls %v, want one into %s", calls, f.binDir)
 	}
-	if got := resolve(t, "yt-dlp"); got != filepath.Join(f.binDir, "yt-dlp", "yt-dlp") {
+	if got := resolve(t, "yt-dlp"); got != filepath.Join(f.binDir, "yt-dlp", testBinaryName("yt-dlp")) {
 		t.Errorf("yt-dlp resolves to %q, want the managed package", got)
 	}
 }

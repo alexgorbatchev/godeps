@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -52,6 +53,30 @@ func createTestZip(t *testing.T, binName, content string) []byte {
 	}
 	_ = zw.Close()
 	return buf.Bytes()
+}
+
+func testBinaryName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
+func createTestReleaseArchive(t *testing.T, binName, content string) []byte {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return createTestZip(t, testBinaryName(binName), content)
+	}
+	return createTestTarGz(t, binName, content)
+}
+
+func nonDirectoryPath(t *testing.T) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(file, "child")
 }
 
 func TestResolveLatestTag(t *testing.T) {
@@ -123,7 +148,7 @@ func TestDownloadAndExtractAsset_TarGz(t *testing.T) {
 		t.Fatalf("downloadAndExtractAsset failed: %v", err)
 	}
 
-	destPath := filepath.Join(tempDir, "mybin")
+	destPath := filepath.Join(tempDir, testBinaryName("mybin"))
 	if _, err := os.Stat(destPath); err != nil {
 		t.Errorf("extracted binary %q does not exist", destPath)
 	}
@@ -145,7 +170,7 @@ func TestDownloadAndExtractAsset_TarGz(t *testing.T) {
 	}
 
 	// Error opening dest file
-	if err := extractTarGzBinary(tarData, "mybin", "/dev/null/invalid_file"); err == nil {
+	if err := extractTarGzBinary(tarData, "mybin", nonDirectoryPath(t)); err == nil {
 		t.Errorf("expected error extracting tar to invalid dest path")
 	}
 }
@@ -166,7 +191,7 @@ func TestDownloadAndExtractAsset_Zip(t *testing.T) {
 		t.Fatalf("downloadAndExtractAsset failed: %v", err)
 	}
 
-	destPath := filepath.Join(tempDir, "mybin")
+	destPath := filepath.Join(tempDir, testBinaryName("mybin"))
 	if _, err := os.Stat(destPath); err != nil {
 		t.Errorf("extracted binary %q does not exist", destPath)
 	}
@@ -188,14 +213,15 @@ func TestDownloadAndExtractAsset_Zip(t *testing.T) {
 	}
 
 	// Error opening dest file in zip extraction
-	if err := extractZipBinary(zipData, "mybin", "/dev/null/invalid_file"); err == nil {
+	if err := extractZipBinary(zipData, "mybin", nonDirectoryPath(t)); err == nil {
 		t.Errorf("expected error extracting zip to invalid dest path")
 	}
 }
 
 func TestDownloadAndExtractGoBinary_Fallback(t *testing.T) {
 	tempDir := t.TempDir()
-	tarData := createTestTarGz(t, "mybin", "#!/bin/sh\necho ok\n")
+	const content = "release binary content"
+	archive := createTestReleaseArchive(t, "mybin", content)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -204,8 +230,7 @@ func TestDownloadAndExtractGoBinary_Fallback(t *testing.T) {
 		case strings.Contains(r.URL.Path, "repo_1.0.0"):
 			http.NotFound(w, r)
 		case strings.Contains(r.URL.Path, "mybin_1.0.0"):
-			w.Header().Set("Content-Type", "application/gzip")
-			w.Write(tarData)
+			w.Write(archive)
 		default:
 			http.NotFound(w, r)
 		}
@@ -219,6 +244,9 @@ func TestDownloadAndExtractGoBinary_Fallback(t *testing.T) {
 	ctx := context.Background()
 	if err := DownloadAndExtractGoBinary(ctx, "owner", "repo", "mybin", tempDir); err != nil {
 		t.Fatalf("DownloadAndExtractGoBinary fallback failed: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(tempDir, testBinaryName("mybin"))); err != nil || string(data) != content {
+		t.Fatalf("installed binary = %q, err = %v; want %q", data, err, content)
 	}
 
 	// Failure case where both fail
@@ -316,7 +344,7 @@ func TestDownloadDirectBinary(t *testing.T) {
 	}
 
 	// Target dir permission / creation error
-	if err := DownloadDirectBinary(ctx, ts.URL, "bin", "/dev/null/invalid_dir"); err == nil {
+	if err := DownloadDirectBinary(ctx, ts.URL, "bin", nonDirectoryPath(t)); err == nil {
 		t.Errorf("expected error writing to invalid dir")
 	}
 }
