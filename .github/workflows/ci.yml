@@ -25,14 +25,5 @@ jobs:
 
       - uses: extractions/setup-just@v4
 
-      - name: Check module hygiene
-        run: just tidy
-
-      - name: Build
-        run: just build
-
-      - name: Vet
-        run: just vet
-
-      - name: Test
-        run: just test
+      - name: Check
+        run: just check

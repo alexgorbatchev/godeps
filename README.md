@@ -168,16 +168,7 @@ On Windows, which has no SIGTERM, cancellation kills the process as `exec.Comman
 
 ## Development
 
-```bash
-# Run tests with race detection and coverage verification
-just test
-
-# Static analysis
-just vet
-
-# Format code
-just fmt
-```
+Contributor commands are documented in [AGENTS.md](AGENTS.md#1-development--verification-commands).
 
 ---
 

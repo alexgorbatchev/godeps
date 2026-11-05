@@ -4,6 +4,9 @@
 default:
     @just --list
 
+# Run every required check without rewriting source or module files
+check: fmt-check tidy build vet test
+
 # Run all unit tests and require 90% statement coverage
 test:
     go test -v -race -coverprofile=coverage.out ./...
@@ -22,6 +25,16 @@ vet:
 # Format Go code
 fmt:
     go fmt ./...
+
+# Reject unformatted Go source without rewriting it
+fmt-check:
+    #!/bin/sh
+    set -eu
+    unformatted="$(gofmt -l *.go)"
+    if [ -n "$unformatted" ]; then
+        printf '%s\n' "$unformatted"
+        exit 1
+    fi
 
 # Run module hygiene check
 tidy:

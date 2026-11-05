@@ -1,6 +1,6 @@
 ---
 created_on: 2026-08-23 13:25
-last_modified: 2026-11-04 12:07
+last_modified: 2026-11-04 22:51
 status: current
 ---
 
@@ -15,6 +15,9 @@ Operational guidelines, architecture, and developer interface specifications for
 All development tasks must be executed using `just` recipes:
 
 ```bash
+# Run formatting, module hygiene, host/Windows build and vet, and race/coverage tests
+just check
+
 # Run full unit test suite with race detector; fails below 90% statement coverage
 just test
 
@@ -27,11 +30,16 @@ just vet
 # Format all Go source files
 just fmt
 
+# Reject unformatted Go source without rewriting it
+just fmt-check
+
 # Verify module hygiene
 just tidy
 ```
 
-CI (`.github/workflows/ci.yml`) runs `just tidy`, `just build`, `just vet`, and `just test` on Linux and macOS for pushes and pull requests to `main`.
+Run `just check` before completing changes. It stops at the first failed check and preserves source and module files; tests write the ignored `coverage.out` report. Apply formatting separately with `just fmt`.
+
+CI (`.github/workflows/ci.yml`) runs `just check` on Linux and macOS for pushes and pull requests to `main`.
 
 ---
 
