@@ -115,10 +115,20 @@ func capture(t *testing.T, stream **os.File) func() string {
 		t.Fatal(err)
 	}
 	original := *stream
+	closeFile := func(f *os.File) {
+		if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Errorf("closing captured stream: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		*stream = original
+		closeFile(w)
+		closeFile(r)
+	})
 	*stream = w
-	t.Cleanup(func() { *stream = original })
 	return func() string {
 		*stream = original
+		defer closeFile(r)
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
