@@ -99,26 +99,41 @@ func TestEnsureWritesMessagesToStandardError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := stdout(); got != "" {
+	if got := stdout.collect(); got != "" {
 		t.Errorf("standard output %q", got)
 	}
-	if got := stderr(); !strings.Contains(got, "Successfully installed: toolA") {
+	if got := stderr.collect(); !strings.Contains(got, "Successfully installed: toolA") {
 		t.Errorf("standard error %q", got)
 	}
 }
 
-// capture replaces a standard stream with a pipe and returns its contents.
-func capture(t *testing.T, stream **os.File) func() string {
+type capturedStream struct {
+	reader, writer *os.File
+	collect        func() string
+}
+
+// capture replaces a standard stream with a pipe until collection or cleanup.
+func capture(t *testing.T, stream **os.File) capturedStream {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	original := *stream
-	*stream = w
-	t.Cleanup(func() { *stream = original })
-	return func() string {
+	closeFile := func(f *os.File) {
+		if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Errorf("closing captured stream: %v", err)
+		}
+	}
+	t.Cleanup(func() {
 		*stream = original
+		closeFile(w)
+		closeFile(r)
+	})
+	*stream = w
+	collect := func() string {
+		*stream = original
+		defer closeFile(r)
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -128,6 +143,7 @@ func capture(t *testing.T, stream **os.File) func() string {
 		}
 		return string(data)
 	}
+	return capturedStream{reader: r, writer: w, collect: collect}
 }
 
 func TestInstallUnsatisfiedUpdatesInstalledTools(t *testing.T) {
