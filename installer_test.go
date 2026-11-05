@@ -9,12 +9,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func createTestTarGz(t *testing.T, binName, content string) []byte {
@@ -338,14 +341,63 @@ func TestDownloadDirectBinary(t *testing.T) {
 		t.Errorf("expected error on HTTP 500")
 	}
 
-	// Invalid URL error
-	if err := DownloadDirectBinary(ctx, "http://invalid-nonexistent-domain-12345.xyz/bin", "bin", t.TempDir()); err == nil {
-		t.Errorf("expected error for invalid domain URL")
-	}
-
 	// Target dir permission / creation error
 	if err := DownloadDirectBinary(ctx, ts.URL, "bin", nonDirectoryPath(t)); err == nil {
 		t.Errorf("expected error writing to invalid dir")
+	}
+}
+
+func TestDownloadDirectBinaryMalformedURL(t *testing.T) {
+	const requestTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), requestTimeout)
+	t.Cleanup(cancel)
+	targetDir := t.TempDir()
+
+	err := DownloadDirectBinary(ctx, "http://127.0.0.1/%zz", "bin", targetDir)
+	var escapeErr url.EscapeError
+	if !errors.As(err, &escapeErr) {
+		t.Fatalf("expected URL escape error, got %v", err)
+	}
+
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("failed download left files: %v", entries)
+	}
+}
+
+func TestDownloadDirectBinaryAbortedResponse(t *testing.T) {
+	var requested atomic.Bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested.Store(true)
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(ts.Close)
+	const requestTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), requestTimeout)
+	t.Cleanup(cancel)
+	targetDir := t.TempDir()
+
+	err := DownloadDirectBinary(ctx, ts.URL+"/bin", "bin", targetDir)
+	var requestErr *url.Error
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("expected HTTP request error, got %v", err)
+	}
+	if requestErr.Op != "Get" || requestErr.Timeout() || ctx.Err() != nil {
+		t.Fatalf("expected aborted GET response, got %v (context: %v)", err, ctx.Err())
+	}
+	if !requested.Load() {
+		t.Fatal("download did not reach the local server")
+	}
+
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("failed download left files: %v", entries)
 	}
 }
 
