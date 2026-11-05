@@ -4,6 +4,7 @@ package godeps
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,54 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCleanPreservesSessionScratch(t *testing.T) {
+	just, err := exec.LookPath("just")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe, err := os.ReadFile("justfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	files := map[string][]byte{
+		"justfile":                  recipe,
+		".tmp/another-session/keep": []byte("active session scratch\n"),
+		"bin/tool":                  []byte("compiled binary"),
+		"dist/release":              []byte("release artifact"),
+		"coverage.out":              []byte("coverage report"),
+	}
+	for name, data := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		cmd := CommandContext(t.Context(), just, "--justfile", filepath.Join(dir, "justfile"), "clean")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("just clean: %v\n%s", err, out)
+		}
+		for _, name := range []string{"bin", "dist", "coverage.out"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("cleaned output %s: expected absence, got %v", name, err)
+			}
+		}
+		for _, name := range []string{"justfile", ".tmp/another-session/keep"} {
+			got, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, files[name]) {
+				t.Errorf("just clean modified %s", name)
+			}
+		}
+	}
+}
 
 func TestCheckRecipe(t *testing.T) {
 	just, err := exec.LookPath("just")

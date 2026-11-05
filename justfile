@@ -40,9 +40,9 @@ fmt-check:
 tidy:
     go mod tidy -diff
 
-# Clean temporary and test artifacts
+# Clean build and coverage outputs while preserving session scratch
 clean:
-    rm -rf bin dist coverage.out .tmp
+    rm -rf bin dist coverage.out
 
 # Download project dependencies for local development
 setup:

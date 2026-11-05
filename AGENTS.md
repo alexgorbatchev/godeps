@@ -39,6 +39,8 @@ just tidy
 
 Run `just check` before completing changes. It stops at the first failed check and preserves source and module files; tests write the ignored `coverage.out` report. Apply formatting separately with `just fmt`.
 
+`just clean` removes build and coverage outputs; it preserves `.tmp/` and session-owned scratch.
+
 CI (`.github/workflows/ci.yml`) runs `just check` natively on Linux, macOS, and Windows for pushes and pull requests to `main`. Windows uses Git Bash for the existing recipes and the hosted runner's C compiler for race detection.
 
 ---
