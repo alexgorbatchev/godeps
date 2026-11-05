@@ -190,7 +190,7 @@ func replaceDir(staged, dest string) error {
 // destDir, preserving file permissions and relative symbolic links. All writes
 // go through an os.Root, so neither an entry name nor a chain of extracted
 // links can place anything outside destDir; link targets must also stay inside
-// the archive root.
+// the archive root and resolve after extraction is complete.
 func extractZipTree(archivePath, destDir string) error {
 	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -224,7 +224,20 @@ func extractZipTree(archivePath, destDir string) error {
 			return fmt.Errorf("extracting %q: %w", f.Name, err)
 		}
 	}
-	return nil
+	// Root confines writes, but Symlink does not validate its target. Check the
+	// completed tree so a link through another link cannot escape at runtime.
+	// Deferring this check also permits targets appearing later in the archive.
+	return fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if _, err := root.Stat(name); err != nil {
+				return fmt.Errorf("validating symbolic link %q: %w", name, err)
+			}
+		}
+		return nil
+	})
 }
 
 func extractZipFile(root *os.Root, f *zip.File, name string, perm fs.FileMode) error {
@@ -259,7 +272,9 @@ func extractZipSymlink(root *os.Root, f *zip.File, name string) error {
 		return err
 	}
 	link := filepath.FromSlash(string(target))
-	if filepath.IsAbs(link) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), link)) {
+	// Windows rooted paths need not have a drive, and drive-relative paths
+	// need not start with a separator. Reject both before Join cleans them.
+	if filepath.VolumeName(link) != "" || strings.HasPrefix(link, string(filepath.Separator)) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), link)) {
 		return fmt.Errorf("symbolic link target %q is outside the archive root", target)
 	}
 	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {

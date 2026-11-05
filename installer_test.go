@@ -418,6 +418,7 @@ func TestInstallPackage_OSBranches(t *testing.T) {
 func TestBuiltInInstallers(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
+	archive := createTestReleaseArchive(t, "mybin", "ok")
 
 	// Installers must never reach real package managers or tools from tests.
 	var pkgCalls []string
@@ -436,7 +437,7 @@ func TestBuiltInInstallers(t *testing.T) {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v1.0.0", http.StatusFound)
 			return
 		}
-		w.Write(createTestTarGz(t, "mybin", "ok"))
+		w.Write(archive)
 	}))
 	defer ts.Close()
 
@@ -450,6 +451,9 @@ func TestBuiltInInstallers(t *testing.T) {
 	}
 	if err := ghInstaller.Update(ctx, tempDir); err != nil {
 		t.Errorf("GitHubReleaseGoBinary.Update() error: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(tempDir, testBinaryName("mybin"))); err != nil || string(data) != "ok" {
+		t.Errorf("installed binary = %q, %v; want ok", data, err)
 	}
 
 	pkgInstaller := SystemPackageManager("ffmpeg")

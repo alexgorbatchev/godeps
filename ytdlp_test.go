@@ -52,8 +52,8 @@ func unpackedBuild(t *testing.T, executable string) []byte {
 	t.Helper()
 	return buildZip(t,
 		zipEntry{name: "_internal/", mode: fs.ModeDir | 0o755},
-		zipEntry{name: "_internal/base_library.zip", mode: 0o644, body: "library"},
 		zipEntry{name: "_internal/current", mode: fs.ModeSymlink | 0o777, body: "base_library.zip"},
+		zipEntry{name: "_internal/base_library.zip", mode: 0o644, body: "library"},
 		zipEntry{name: executable, mode: 0o755, body: "#!/bin/sh\necho 2026.10.26\n"},
 	)
 }
@@ -235,23 +235,40 @@ func TestInstallYtDlpReplacesPreviousInstall(t *testing.T) {
 }
 
 func TestInstallYtDlpFailureKeepsPreviousInstall(t *testing.T) {
-	tests := []struct {
+	type failureCase struct {
 		name    string
 		archive []byte
-	}{
+	}
+	absoluteTarget := filepath.Join(t.TempDir(), "outside")
+	tests := []failureCase{
 		{name: "download fails"},
 		{name: "corrupt archive", archive: []byte("not a zip")},
 		{name: "archive without the executable", archive: buildZip(t, zipEntry{name: "_internal/lib", mode: 0o644})},
 		{name: "entry outside the archive root", archive: buildZip(t, zipEntry{name: "../escaped", mode: 0o644}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "link outside the archive root", archive: buildZip(t, zipEntry{name: "_internal/escaped", mode: fs.ModeSymlink | 0o777, body: "../../escaped"}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "write through a chain of links", archive: buildZip(t,
-			zipEntry{name: "a/b/l1", mode: fs.ModeSymlink | 0o777, body: ".."},
-			zipEntry{name: "a/b/l2", mode: fs.ModeSymlink | 0o777, body: "l1/../.."},
-			zipEntry{name: "a/b/l2/escaped", mode: 0o644},
+			zipEntry{name: "a/b/l1", mode: fs.ModeSymlink | 0o777, body: "../.."},
+			zipEntry{name: "a/b/l1/l2", mode: fs.ModeSymlink | 0o777, body: ".."},
+			zipEntry{name: "a/b/l1/l2/escaped", mode: 0o644},
+			zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+		{name: "escaping link without a write", archive: buildZip(t,
+			zipEntry{name: "a/b/l1", mode: fs.ModeSymlink | 0o777, body: "../.."},
+			zipEntry{name: "a/b/l1/l2", mode: fs.ModeSymlink | 0o777, body: ".."},
 			zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "absolute link", archive: buildZip(t, zipEntry{name: "escaped", mode: fs.ModeSymlink | 0o777, body: "/etc"}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+		{name: "native absolute link", archive: buildZip(t, zipEntry{name: "escaped", mode: fs.ModeSymlink | 0o777, body: absoluteTarget}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+		{name: "dangling link", archive: buildZip(t, zipEntry{name: "missing", mode: fs.ModeSymlink | 0o777, body: "absent"}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+		{name: "cyclic links", archive: buildZip(t,
+			zipEntry{name: "first", mode: fs.ModeSymlink | 0o777, body: "second"},
+			zipEntry{name: "second", mode: fs.ModeSymlink | 0o777, body: "first"},
+			zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "unsupported entry type", archive: buildZip(t, zipEntry{name: "pipe", mode: fs.ModeNamedPipe | 0o644}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
 		{name: "duplicate entries", archive: buildZip(t, zipEntry{name: "yt-dlp_macos", mode: 0o755}, zipEntry{name: "yt-dlp_macos", mode: 0o755})},
+	}
+	if volume := filepath.VolumeName(absoluteTarget); volume != "" {
+		tests = append(tests, failureCase{name: "drive-relative link", archive: buildZip(t,
+			zipEntry{name: "escaped", mode: fs.ModeSymlink | 0o777, body: volume + "outside"},
+			zipEntry{name: "yt-dlp_macos", mode: 0o755})})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

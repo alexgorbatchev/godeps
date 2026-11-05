@@ -137,7 +137,7 @@ cleanError := godeps.SanitizeStderr(rawStderrOutput)
 
 `<data>` is `$XDG_DATA_HOME`, then `%LOCALAPPDATA%` on Windows, then `~/.local/share`. The bin directory and each package directory are separate `PATH` entries. Subdirectories whose names start with a dot hold in-progress downloads and are never put on `PATH`.
 
-yt-dlp's unpacked build runs directly from `bin/yt-dlp/` and creates nothing in the system temporary directory. An installation is extracted next to the package directory and moved into place only once complete, so a failed download or extraction leaves the previous installation working. Archive entries and links that would land outside the package directory fail the installation. Downloads and staging trees left by an installation that was killed are removed by the next installation once they are an hour old. Installing replaces an earlier one-file `bin/yt-dlp` (or `bin/yt-dlp.exe`) executable.
+yt-dlp's unpacked build runs directly from `bin/yt-dlp/` and creates nothing in the system temporary directory. An installation is extracted next to the package directory and moved into place only once complete, so a failed download or extraction leaves the previous installation working. Archive entries and links that would land outside the package directory fail the installation. Symbolic links must resolve inside the completed extraction; dangling links and loops also fail installation. Targets may appear later in the archive. Downloads and staging trees left by an installation that was killed are removed by the next installation once they are an hour old. Installing replaces an earlier one-file `bin/yt-dlp` (or `bin/yt-dlp.exe`) executable.
 
 ---
 

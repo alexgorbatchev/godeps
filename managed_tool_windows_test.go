@@ -38,15 +38,14 @@ func writeTool(t *testing.T, dir, name, version string) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Prefer a hard link to avoid copying a test binary for every tool.
-		if err := os.Link(executable, path); err != nil {
-			data, err := os.ReadFile(executable)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, data, 0o755); err != nil {
-				t.Fatal(err)
-			}
+		// A hard link shares the running parent's executable image and cannot
+		// be deleted by TempDir cleanup while that parent is still running.
+		data, err := os.ReadFile(executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
 		}
 	} else if err != nil {
 		t.Fatal(err)
