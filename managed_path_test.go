@@ -89,6 +89,98 @@ func TestInitManagedPathAppendsManagedDirectories(t *testing.T) {
 	}
 }
 
+func TestInitManagedPathPreservesExistingEntries(t *testing.T) {
+	f := newManagedFixture(t)
+	writeTool(t, f.globalDir, "tool", "1.0.0")
+	writeTool(t, f.binDir, "tool", "2.0.0")
+	pkgDir := filepath.Join(f.binDir, "helper")
+	writeTool(t, pkgDir, "helper", "3.0.0")
+	sep := string(os.PathListSeparator)
+	others := strings.Join([]string{f.globalDir, "", f.globalDir + "/.", f.globalDir, ""}, sep)
+	tests := []struct {
+		name, path, version string
+	}{
+		{name: "already first", path: f.binDir + sep + others, version: "2.0.0"},
+		{name: "trailing", path: others + sep + f.binDir, version: "1.0.0"},
+		{name: "duplicates", path: others + sep + f.binDir + sep + f.binDir, version: "1.0.0"},
+		{name: "normalized first", path: f.binDir + "/./" + sep + others, version: "2.0.0"},
+		{name: "normalized trailing", path: others + sep + f.binDir + "/../bin/", version: "1.0.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PATH", tt.path)
+			for range 2 {
+				if err := InitManagedPath("testapp"); err != nil {
+					t.Fatal(err)
+				}
+				if got, want := os.Getenv("PATH"), tt.path+sep+pkgDir; got != want {
+					t.Errorf("PATH = %q, want %q", got, want)
+				}
+				out, err := DefaultRunner(t.Context(), "tool", "--version")
+				if err != nil || strings.TrimSpace(string(out)) != tt.version {
+					t.Errorf("tool output = %q, error = %v; want version %s", out, err, tt.version)
+				}
+				out, err = DefaultRunner(t.Context(), "helper", "--version")
+				if err != nil || strings.TrimSpace(string(out)) != "3.0.0" {
+					t.Errorf("helper output = %q, error = %v; want managed package version 3.0.0", out, err)
+				}
+			}
+		})
+	}
+}
+
+func TestManagerInitManagedPathPromotesExistingEntries(t *testing.T) {
+	for _, layout := range []string{"single executable", "package directory"} {
+		t.Run(layout, func(t *testing.T) {
+			f := newManagedFixture(t)
+			dir := f.binDir
+			if layout == "package directory" {
+				dir = filepath.Join(f.binDir, "tool")
+			}
+			managed := writeTool(t, dir, "tool", "2.0.0")
+			writeTool(t, f.globalDir, "tool", "1.0.0")
+			m := New(Config{AppName: "testapp", Dependencies: []Dependency{{Name: "tool", MinVersion: "2.0.0"}}})
+			sep := string(os.PathListSeparator)
+			others := strings.Join([]string{f.globalDir, "", f.globalDir + "/.", f.globalDir, ""}, sep)
+			want := dir + sep + others
+			if dir != f.binDir {
+				want += sep + f.binDir
+			}
+			tests := []struct {
+				name, path string
+			}{
+				{name: "already first", path: dir + sep + others},
+				{name: "trailing", path: others + sep + dir},
+				{name: "duplicates", path: dir + sep + others + sep + dir},
+				{name: "trailing separator", path: others + sep + dir + "/"},
+				{name: "dot component", path: others + sep + dir + "/./"},
+				{name: "parent component", path: others + sep + dir + "/../" + filepath.Base(dir)},
+				{name: "normalized duplicates", path: dir + "/./" + sep + others + sep + dir + "/../" + filepath.Base(dir)},
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Setenv("PATH", tt.path)
+					for range 2 {
+						if err := m.InitManagedPath(t.Context()); err != nil {
+							t.Fatal(err)
+						}
+						if got := os.Getenv("PATH"); got != want {
+							t.Errorf("PATH = %q, want %q", got, want)
+						}
+						if got := resolve(t, "tool"); got != managed {
+							t.Errorf("tool resolves to %q, want managed copy %q", got, managed)
+						}
+						out, err := DefaultRunner(t.Context(), "tool", "--version")
+						if err != nil || strings.TrimSpace(string(out)) != "2.0.0" {
+							t.Errorf("tool output = %q, error = %v; want managed version 2.0.0", out, err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestManagerInitManagedPathPrefersSatisfyingCopies(t *testing.T) {
 	tests := []struct {
 		name string
