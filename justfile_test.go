@@ -72,15 +72,17 @@ func TestCheckRecipe(t *testing.T) {
 	}
 	steps := []string{"tidy", "build-host", "build-windows", "vet-host", "vet-windows", "test"}
 	type checkCase struct {
-		name       string
-		fail       string
-		source     string
-		uncovered  bool
-		wantFailed bool
-		wantSteps  int
+		name         string
+		fail         string
+		source       string
+		uncovered    bool
+		shellStartup bool
+		wantFailed   bool
+		wantSteps    int
 	}
 	tests := []checkCase{
 		{name: "complete", wantSteps: len(steps)},
+		{name: "shell startup overrides PATH", shellStartup: true, wantSteps: len(steps)},
 		{name: "unformatted source", source: "package fixture\nfunc ready( )bool{return true}\n", wantFailed: true},
 		{name: "invalid source", source: "package fixture\nfunc ready(\n", wantFailed: true},
 		{name: "coverage below threshold", uncovered: true, wantFailed: true, wantSteps: len(steps)},
@@ -129,8 +131,29 @@ func TestCheckRecipe(t *testing.T) {
 			if tt.uncovered {
 				hits = "0"
 			}
-			cmd := CommandContext(t.Context(), just, "--justfile", filepath.Join(dir, "justfile"), "check")
-			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GOOS=", "GODEPS_CHECK_LOG="+log, "GODEPS_CHECK_FAIL="+tt.fail, "GODEPS_CHECK_HITS="+hits)
+			command := just
+			args := []string{"--justfile", filepath.Join(dir, "justfile"), "check"}
+			if tt.shellStartup {
+				startup := filepath.Join(dir, "bashenv")
+				if err := os.WriteFile(startup, []byte("export PATH=\"$GODEPS_CHECK_ORIGINAL_PATH\"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("BASH_ENV", startup)
+				t.Setenv("GODEPS_CHECK_ORIGINAL_PATH", os.Getenv("PATH"))
+				bash, err := exec.LookPath("bash")
+				if err != nil {
+					t.Fatal(err)
+				}
+				command = bash
+				args = append([]string{"-c", `exec "$@"`, "recipe-launcher", just}, args...)
+			}
+			cmd := CommandContext(t.Context(), command, args...)
+			// Bash-based tool launchers must not source caller startup files that
+			// replace the controlled PATH before the recipe runs.
+			env := slices.DeleteFunc(os.Environ(), func(value string) bool {
+				return strings.HasPrefix(value, "BASH_ENV=")
+			})
+			cmd.Env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GOOS=", "GODEPS_CHECK_LOG="+log, "GODEPS_CHECK_FAIL="+tt.fail, "GODEPS_CHECK_HITS="+hits)
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantFailed {
 				t.Errorf("just check error = %v, want failed=%v\n%s", err, tt.wantFailed, out)
