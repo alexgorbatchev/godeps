@@ -13,6 +13,10 @@ dist/
 coverage.out
 .tmp/
 
+# Persistent local state and reusable caches
+/.state/
+/.cache/
+
 # OS & IDE
 .DS_Store
 .idea/
