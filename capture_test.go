@@ -63,7 +63,7 @@ func assertCaptureClosed(t *testing.T, captured capturedStream) {
 		if endpoint.file == nil {
 			t.Fatalf("capture did not create a %s", endpoint.name)
 		}
-		if _, err := endpoint.file.Stat(); !errors.Is(err, os.ErrClosed) {
+		if err := endpoint.file.Close(); !errors.Is(err, os.ErrClosed) {
 			t.Errorf("%s after capture: got %v, want os.ErrClosed", endpoint.name, err)
 		}
 	}
